@@ -1,0 +1,52 @@
+#ifndef __MULTITHREADEVENTLOOP_H__
+#define __MULTITHREADEVENTLOOP_H__
+
+#include <vector>
+#include <memory>
+#include <thread>
+#include "EventLoop.h"
+#include "Acceptor.h"
+#include "TcpConnection.h"
+#include "UdpConnection.h"
+#include "ThreadPool.h"
+#include "Logger.h"
+#include "../media/RtspConnect.h"
+
+class MultiThreadEventLoop {
+public:
+    MultiThreadEventLoop(const std::string& ip, unsigned short port, size_t threadNum);
+    ~MultiThreadEventLoop();
+
+    void start();
+    void stop();
+
+    // 获取下一个EventLoop（轮询方式）
+    EventLoop* getNextLoop();
+    
+    // 获取主EventLoop
+    EventLoop* getMainLoop() { return &_mainLoop; }
+
+private:
+    // void threadFunc();  // 工作线程函数
+    void onNewConnection(int connfd);
+    void onMessage(const TcpConnectionPtr& connPtr);
+    void onClose(const TcpConnectionPtr& connPtr);
+    void createRtpUdpConnection(std::shared_ptr<RtspConnect> rtspConn);
+    void onRtpData(const UdpConnectionPtr& udpConn);
+
+private:
+    Acceptor _acceptor;
+    EventLoop _mainLoop;  // 主线程的EventLoop，负责接受连接
+    
+    std::vector<std::unique_ptr<EventLoop>> _subLoops;  // 子线程的EventLoop
+    size_t _threadNum;
+
+    ThreadPool _threadPool;
+    
+    std::atomic<size_t> _nextLoopIndex;  // 下一个要使用的EventLoop索引
+    
+    std::atomic<bool> _running;
+
+};
+
+#endif 

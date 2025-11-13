@@ -1,0 +1,78 @@
+#include "UdpConnection.h"
+#include <iostream>
+#include <sstream>
+
+using std::cout;
+using std::endl;
+using std::ostringstream;
+
+UdpConnection::UdpConnection(const string &ip,unsigned short port,InetAddress peerAddr,EventLoop* loopPtr)
+    : _loopPtr(loopPtr), _sock(ip,port,peerAddr), _localAddr(getLocalAddr()), _peerAddr(peerAddr) {
+    _sock.setReuseAddr();
+    _sock.setReusePort();
+}
+
+UdpConnection::~UdpConnection() {
+}
+
+void UdpConnection::send(const std::string& msg) {
+    _sock.sendto(msg.c_str(), msg.size());
+}
+
+void UdpConnection::sendInLoop(const std::string& msg) {
+    if (_loopPtr) {
+        _loopPtr->runInLoop([self = shared_from_this(), msg]() {
+            self->send(msg);
+        });
+    }
+}
+
+int UdpConnection::recv(void* buff, size_t len) {
+    int n = _sock.recvfrom(buff, len);
+    if (n > 0)
+        _peerAddr = _sock.getPeerAddr();
+    return n;
+}
+
+void UdpConnection::setMessageCallback(const UdpConnectionCallback& cb) {
+    LOG_WARN("setMessageCallback fd=%d", _sock.fd());
+    _onMessageCb = std::move(cb);
+}
+
+void UdpConnection::handleMessageCallback() {
+    if (_onMessageCb) {
+        _onMessageCb(shared_from_this());
+    }
+}
+
+InetAddress UdpConnection::getLocalAddr() {
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(struct sockaddr);
+    int ret = getsockname(_sock.fd(), (struct sockaddr*)&addr, &len);
+    if (-1 == ret) {
+        perror("getsockname");
+    }
+    return InetAddress(addr);
+}
+
+InetAddress UdpConnection::getPeerAddr(){
+    return _peerAddr;
+}
+
+int UdpConnection::getUdpFd() const {
+    return _sock.fd();
+}
+
+TimerId UdpConnection::addOneTimer(int delaySec, TimerCallback&& cb) {
+    return _loopPtr ? _loopPtr->addOneTimer(delaySec, std::move(cb)) : 0;
+}
+
+TimerId UdpConnection::addPeriodicTimer(int delaySec, int intervalSec, TimerCallback&& cb) {
+    return _loopPtr ? _loopPtr->addPeriodicTimer(delaySec, intervalSec, std::move(cb)) : 0;
+}
+
+void UdpConnection::removeTimer(TimerId timerId) {
+    if (_loopPtr) {
+        _loopPtr->removeTimer(timerId);
+    }
+} 
