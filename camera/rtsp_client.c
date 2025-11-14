@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <unistd.h>
+#include "log.h"
 
 #define DEFAULT_WIDTH 640
 #define DEFAULT_HEIGHT 480
@@ -81,8 +82,8 @@ void *video_stream_thread(void *arg) {
             nalu_view_t nalus[32];
             int n = split_annexb_nalus(h264_data, h264_len, nalus, 32);
             for (int k = 0; k < n; ++k) {
-                const uint8_t *nalu = nalus[k].ptr;
-                size_t nalu_size = nalus[k].len;
+                const uint8_t *nalu = nalus[k].ptr;//待发送nalu
+                size_t nalu_size = nalus[k].len;//待发送nalu长度
                 // 2) 逐 NALU 发送
                 rtp_send_h264(sess, &timestamp, nalu, nalu_size);
             }
@@ -110,12 +111,14 @@ void print_usage(const char *prog_name) {
     printf("  -w, --width WIDTH       视频宽度 (默认: 640)\n");
     printf("  -h, --height HEIGHT     视频高度 (默认: 480)\n");
     printf("  -r, --rtp-port PORT     本地RTP端口 (默认: 5004)\n");
+    printf("  -t, --tcp or udp        默认udp\n");
     printf("  -?, --help              显示帮助信息\n");
 }
 
 int main(int argc, char *argv[]) {
     const char *video_device = "/dev/video0";
     const char *server_ip = NULL;
+    char transType[8] = "udp";
     int server_port = 8554;
     const char *url = "/stream";
     int width = DEFAULT_WIDTH;
@@ -145,7 +148,7 @@ int main(int argc, char *argv[]) {
     int opt;
     int option_index = 0;
     
-    while ((opt = getopt_long(argc, argv, "d:s:p:u:w:h:r:?", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:s:p:u:w:h:r:t:?", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'd':
                 video_device = optarg;
@@ -168,6 +171,9 @@ int main(int argc, char *argv[]) {
             case 'r':
                 rtp_port = atoi(optarg);
                 rtcp_port = rtp_port + 1;
+                break;
+            case 't':
+                snprintf(transType, sizeof(transType), "%s", optarg);
                 break;
             case '?':
                 print_usage(argv[0]);
@@ -249,7 +255,17 @@ int main(int argc, char *argv[]) {
     
     /* RTSP握手流程 */
     printf("\n=== RTSP握手流程 ===\n");
-    
+
+    /* 1.OPTIONS */
+    printf("\n[1] 发送OPTIONS请求...\n");
+    if (rtsp_client_options(&session, rtsp_url) < 0){
+        fprintf(stderr, "发送OPTIONS请求失败\n");
+        goto cleanup;
+    }
+    if (rtsp_client_read_response(&session, response, sizeof(response)) <= 0) {
+        fprintf(stderr, "接收OPTIONS响应失败\n");
+        goto cleanup;
+    }
     
     /* 2. ANNOUNCE（推流场景，携带SDP） */
     printf("\n[1] 发送ANNOUNCE请求...\n");
@@ -272,8 +288,12 @@ int main(int argc, char *argv[]) {
     
     /* 3. SETUP */
     printf("\n[3] 发送SETUP请求...\n");
-    snprintf(transport, sizeof(transport), 
-             "RTP/AVP/UDP;unicast;client_port=%d-%d", rtp_port, rtcp_port);
+    if(strcmp(transType,"tcp") == 0){
+        snprintf(transport, sizeof(transport),"RTP/AVP/TCP;unicast;interleaved=0-1");
+    }else{
+        snprintf(transport, sizeof(transport),"RTP/AVP/UDP;unicast;client_port=%d-%d", rtp_port, rtcp_port);
+    }
+    
     if (rtsp_client_setup(&session, rtsp_url, transport) < 0) {
         fprintf(stderr, "发送SETUP请求失败\n");
         goto cleanup;
@@ -283,13 +303,12 @@ int main(int argc, char *argv[]) {
         goto cleanup;
     }
     
-    /* 解析SETUP响应，获取服务器端口和Session ID */
-    if (rtsp_parse_setup_response(response, &session.server_rtp_port, 
-                                   &session.server_rtcp_port, session.session_id) < 0) {
+ 
+        /* 解析SETUP响应，获取服务器端口和Session ID */
+    if (rtsp_parse_setup_response(response, &session) < 0) {
         fprintf(stderr, "解析SETUP响应失败\n");
         goto cleanup;
     }
-    
     printf("服务器RTP端口: %d, RTCP端口: %d\n", session.server_rtp_port, session.server_rtcp_port);
     printf("Session ID: %s\n", session.session_id);
     
@@ -332,7 +351,6 @@ int main(int argc, char *argv[]) {
 cleanup:
     /* 5. TEARDOWN */
     if (session.state != RTSP_STATE_INIT) {
-        printf("\n发送TEARDOWN请求...\n");
         rtsp_client_teardown(&session, rtsp_url);
         rtsp_client_read_response(&session, response, sizeof(response));
     }

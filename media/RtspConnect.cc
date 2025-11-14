@@ -19,9 +19,10 @@ RtspConnect::RtspConnect(std::shared_ptr<TcpConnection> tcpConn, EventLoop* loop
     , _clientIp(tcpConn->getPeerAddr().ip())
     , _serverIp(tcpConn->getLocalAddr().ip()){
 
-     _session.sessionId = _sessionManager.generateSessionId();
+    _session.sessionId = _sessionManager.generateSessionId();
     _session.lastActive = std::chrono::steady_clock::now();
     _sessionManager.addSession(_session);
+    _RtpUnpacker = std::make_unique<RtpH264Unpacker>("output.h264");
     LOG_INFO("RtspConnect created - Session: %s, Client: %s", 
              _session.sessionId.c_str(), _clientIp.c_str());
 }
@@ -42,7 +43,9 @@ void RtspConnect::handleRequest(const std::string& request) {
     int cseq = extractCSeq(headers);
     
     // 根据方法分发处理
-    if (method == "ANNOUNCE") {
+    if (method == "OPTIONS"){
+        handleOpitions(request, headers, cseq);
+    }else if (method == "ANNOUNCE") {
         handleAnnounce(request, headers, cseq);
     } else if (method == "SETUP") {
         handleSetup(url, headers, cseq);
@@ -102,7 +105,13 @@ int RtspConnect::extractCSeq(const std::map<std::string, std::string>& headers) 
     return 0;
 }
 
-
+void RtspConnect::handleOpitions(const std::string& request,
+    const std::map<std::string, std::string>& headers, int cseq) {
+    LOG_INFO("Handling OPITIONS request, CSeq: %d", cseq);
+    std::map<std::string, std::string> extraHeaders;
+    extraHeaders["Public"] = "OPTIONS, ANNOUNCE, SETUP, TEARDOWN, RECORD";
+    sendResponse(200, "OK", extraHeaders, cseq);
+}
 
 void RtspConnect::handleAnnounce(const std::string& request,
                                  const std::map<std::string, std::string>& headers, int cseq) {
@@ -163,7 +172,15 @@ void RtspConnect::handleSetup(const std::string& url,
             // _session.videoRtcpConn = std::make_shared<UdpConnection>(_serverIp,serverRtcpPort
             //     ,InetAddress(_clientIp,clientRtcpPort),_loop);
             _loop->addUdpConnection(_session.videoRtpConn);
-            // _loop->addUdpConnection(_session.videoRtcpConn);
+            _loop->addUdpConnection(_session.videoRtcpConn);
+            _session.videoRtpConn->setMessageCallback([this](const UdpConnectionPtr &conn){
+                uint8_t buffer[1500];
+                while (true) {
+                    int n = conn->recv(buffer, sizeof(buffer));
+                    if (n <= 0) break;
+                    _RtpUnpacker->handleRtpPacket(buffer,n);
+                }
+            });
         }else if(url.find("trackID=1") != std::string::npos){   
             if (serverRtpPort == 0) {
                 serverRtpPort = _sessionManager.allocateUdpPorts() + 2;
@@ -246,17 +263,14 @@ void RtspConnect::handleRecord(const std::string& url,
     sendResponse(200, "OK", extraHeaders, cseq);
 
 
-    if(!_RtpUnpacker){
-        _RtpUnpacker = std::make_unique<RtpH264Unpacker>("output.h264");
-    }
-    _session.videoRtpConn->setMessageCallback([this](const UdpConnectionPtr &conn){
-        uint8_t buffer[1500];
-        while (true) {
-            int n = conn->recv(buffer, sizeof(buffer));
-            if (n <= 0) break;
-            _RtpUnpacker->handleRtpPacket(buffer,n);
-        }
-    });
+    // _session.videoRtpConn->setMessageCallback([this](const UdpConnectionPtr &conn){
+    //     uint8_t buffer[1500];
+    //     while (true) {
+    //         int n = conn->recv(buffer, sizeof(buffer));
+    //         if (n <= 0) break;
+    //         _RtpUnpacker->handleRtpPacket(buffer,n);
+    //     }
+    // });
 }
 
 void RtspConnect::handleTeardown(const std::string& url,
@@ -349,6 +363,15 @@ void RtspConnect::sendResponse(int statusCode, const std::string& statusText,
     }
 }
 
+void RtspConnect::onInterleavedFrame(uint8_t ch, const uint8_t* data, size_t len) {
+    if ((ch % 2) == 0) {
+        //RTP
+        _RtpUnpacker->handleRtpPacket(data,len);
+    } else {
+        // RTCP
+        
+    }
+}
 
 bool RtspConnect::parseTransport(const std::string& transport, 
                                  std::string& transportType,

@@ -62,26 +62,52 @@ int tcp_read(tcp_client_t *client, char *buf, int len) {
 }
 
 /* 向服务器发送数据 */
-int tcp_write(tcp_client_t *client, const char *buf, int len) {
-    int sent = 0;
-    int n;
+// int tcp_write(tcp_client_t *client, const char *buf, int len) {
+//     int sent = 0;
+//     int n;
     
-    if (client->fd < 0) {
-        fprintf(stderr, "错误: TCP连接未建立\n");
-        return -1;
-    }
+//     if (client->fd < 0) {
+//         fprintf(stderr, "错误: TCP连接未建立\n");
+//         return -1;
+//     }
     
-    /* 确保所有数据都被发送（循环发送直到全部发送完成） */
-    while (sent < len) {
-        n = send(client->fd, buf + sent, len - sent, 0);
-        if (n < 0) {
-            perror("send");
-            return -1;
+//     /* 确保所有数据都被发送（循环发送直到全部发送完成） */
+//     while (sent < len) {
+//         n = send(client->fd, buf + sent, len - sent, 0);
+//         if (n < 0) {
+//             perror("send");
+//             return -1;
+//         }
+//         sent += n;
+//     }
+//     printf("Tcp send %d data\n",sent);
+//     return sent;
+// }
+
+int tcp_write(tcp_client_t *client,const char *buf,int len){
+    int left = len;
+    const char *pstr = buf;
+    int ret = 0;
+    while(left > 0){
+        ret = write(client->fd, pstr, left);
+        if(ret == -1){
+            if(errno == EINTR){
+                continue;
+            } else if(errno == EAGAIN || errno == EWOULDBLOCK) {
+                // 非阻塞写，暂时写不了
+                return len - left; // 或者返回 0
+            } else {
+                printf("Writen ERROR");
+                return -1;
+            }
+        } else if(ret == 0){
+            break; // 理论上 write 不会返回 0，除非 fd 非常异常
+        } else {
+            pstr += ret;
+            left -= ret;
         }
-        sent += n;
     }
-    
-    return sent;
+    return len - left;//返回实际写入的字节数
 }
 
 /* 关闭TCP客户端连接 */

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 
 /* TCP客户端连接结构 */
 typedef struct tcp_client {

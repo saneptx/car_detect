@@ -26,11 +26,15 @@ typedef struct rtsp_session {
     rtsp_state_t state;
     char session_id[64];
     int cseq;
+    //udp传输
     uint16_t rtp_port;
     uint16_t rtcp_port;
     uint16_t server_rtp_port;
     uint16_t server_rtcp_port;
     udp_socket_t rtp_socket;
+    //tcp传输
+    uint16_t rtpChannel;
+    uint16_t rtcpChannel;
     uint32_t rtp_ssrc;
     atomic_uint_fast16_t rtp_seq;
     pthread_mutex_t      rtp_send_mtx; // 可选：对 send 整体加锁
@@ -47,6 +51,7 @@ typedef struct rtsp_session {
     uint8_t *pps;
     size_t pps_size;
     bool sps_pps_sent;  /* 标记SPS/PPS是否已发送过 */
+    char transType[32];
 } rtsp_session_t;
 
 
@@ -57,17 +62,20 @@ int rtsp_session_init(rtsp_session_t *session);
 void build_rtp_header(uint8_t *header, uint16_t seq, uint32_t timestamp,
     uint32_t ssrc, uint8_t payload_type, bool marker);
 
-void send_h264_frame_udp(rtsp_session_t *session, uint32_t *timestamp,
-    const uint8_t *nalu, size_t nalu_size);
-
+/* 发送RTP包（包含H264 NAL单元） */
+int send_rtp_over_tcp(rtsp_session_t *sess, const uint8_t *rtp_data,
+        size_t rtp_len, uint8_t channel);
 void send_stap_a(rtsp_session_t *session, uint32_t *timestamp,
     const uint8_t *sps, size_t sps_size,
     const uint8_t *pps, size_t pps_size,
     const uint8_t *idr, size_t idr_size);
-/* 发送RTP包（包含H264 NAL单元） */
 void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
     const uint8_t *nalu, size_t nalu_size);
-    
+void send_h264_frame(rtsp_session_t *session, uint32_t *timestamp,
+    const uint8_t *nalu, size_t nalu_size);
+// void send_h264_frame_udp(rtsp_session_t *session, uint32_t *timestamp,
+//     const uint8_t *nalu, size_t nalu_size);
+
 /* 清理RTSP会话 */
 void rtsp_session_cleanup(rtsp_session_t *session);
 
@@ -90,7 +98,7 @@ int rtsp_client_teardown(rtsp_session_t *session, const char *url);
 int rtsp_client_read_response(rtsp_session_t *session, char *response, int len);
 
 /* 解析SETUP响应的传输参数 */
-int rtsp_parse_setup_response(const char *response, uint16_t *server_rtp_port, uint16_t *server_rtcp_port, char *session_id);
+int rtsp_parse_setup_response(const char *response, rtsp_session_t *session);
 
 /* 解析DESCRIBE响应（含SDP），并构建后续SETUP使用的URL */
 int rtsp_parse_describe_response(rtsp_session_t *session, const char *request_url, const char *response);

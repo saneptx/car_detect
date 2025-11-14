@@ -35,7 +35,6 @@ int UdpConnection::recv(void* buff, size_t len) {
 }
 
 void UdpConnection::setMessageCallback(const UdpConnectionCallback& cb) {
-    LOG_WARN("setMessageCallback fd=%d", _sock.fd());
     _onMessageCb = std::move(cb);
 }
 
