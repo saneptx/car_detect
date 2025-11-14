@@ -79,55 +79,162 @@ string TcpConnection::recive(){
 
 
 
-std::string TcpConnection::reciveRtspRequest() {
-    char temp[4096];
-    int n = ::recv(_sock.fd(), temp, sizeof(temp), 0);
-    if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK)
-            return "";
-        LOG_ERROR("Error reading from fd %d: %s", getFd(), strerror(errno));
-        return "";
-    } else if (n == 0) {
-        LOG_DEBUG("Connection closed by peer on fd %d", getFd());
-        return "";
+// std::string TcpConnection::reciveRtspRequest() {
+//     char temp[4096];
+//     int n = ::recv(_sock.fd(), temp, sizeof(temp), 0);
+//     if (n < 0) {
+//         if (errno == EAGAIN || errno == EWOULDBLOCK)
+//             return "";
+//         LOG_ERROR("Error reading from fd %d: %s", getFd(), strerror(errno));
+//         return "";
+//     } else if (n == 0) {
+//         LOG_DEBUG("Connection closed by peer on fd %d", getFd());
+//         return "";
+//     }
+
+//     _recvBuffer.append(temp, n);
+
+//     // 尝试解析多条请求（可能批量到达）
+//     while (true) {
+//         // 找header结束位置
+//         size_t headerEnd = _recvBuffer.find("\r\n\r\n");
+//         if (headerEnd == std::string::npos)
+//             break;  // header还没收完，等待下次数据
+
+//         // 提取header
+//         std::string headerPart = _recvBuffer.substr(0, headerEnd + 4);
+
+//         // 查找 Content-Length
+//         size_t lenPos = headerPart.find("Content-Length:");
+//         size_t contentLen = 0;
+//         if (lenPos != std::string::npos) {
+//             lenPos += 15; // 跳过"Content-Length:"
+//             while (lenPos < headerPart.size() && isspace(headerPart[lenPos]))
+//                 lenPos++;
+//             contentLen = std::stoul(headerPart.substr(lenPos));
+//         }
+
+//         // 计算完整包长度 = header + body
+//         size_t totalLen = headerEnd + 4 + contentLen;
+//         if (_recvBuffer.size() < totalLen)
+//             break;  // body还没收完，继续等
+
+//         // ✅ 提取完整请求
+//         std::string oneRequest = _recvBuffer.substr(0, totalLen);
+//         _recvBuffer.erase(0, totalLen);
+//         return oneRequest; // 返回一条完整请求
+//     }
+
+//     return "";
+// }
+
+
+bool TcpConnection::tryExtractInterleaved(InterleavedFrame& out) {
+    
+    if (_recvBuffer.empty() || _recvBuffer[0] != '$') return false;
+    if (_recvBuffer.size() < 4) return false; // 还没到 4 字节头
+
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(_recvBuffer.data());
+    uint8_t channel = p[1];
+    uint16_t len = (uint16_t(p[2]) << 8) | uint16_t(p[3]);
+
+    // 可选：简单风控，防止异常巨长
+    if (len > 15000) { // 你也可以换成更合理的上限
+        LOG_WARN("Interleaved frame length too large: %u, dropping", (unsigned)len);
+        // 丢弃 '$' 以避免死循环
+        _recvBuffer.erase(0, 1);
+        return false;
     }
+    if (_recvBuffer.size() < 4u + len) return false; // 体还没收全
 
-    _recvBuffer.append(temp, n);
-
-    // 尝试解析多条请求（可能批量到达）
-    while (true) {
-        // 找header结束位置
-        size_t headerEnd = _recvBuffer.find("\r\n\r\n");
-        if (headerEnd == std::string::npos)
-            break;  // header还没收完，等待下次数据
-
-        // 提取header
-        std::string headerPart = _recvBuffer.substr(0, headerEnd + 4);
-
-        // 查找 Content-Length
-        size_t lenPos = headerPart.find("Content-Length:");
-        size_t contentLen = 0;
-        if (lenPos != std::string::npos) {
-            lenPos += 15; // 跳过"Content-Length:"
-            while (lenPos < headerPart.size() && isspace(headerPart[lenPos]))
-                lenPos++;
-            contentLen = std::stoul(headerPart.substr(lenPos));
-        }
-
-        // 计算完整包长度 = header + body
-        size_t totalLen = headerEnd + 4 + contentLen;
-        if (_recvBuffer.size() < totalLen)
-            break;  // body还没收完，继续等
-
-        // ✅ 提取完整请求
-        std::string oneRequest = _recvBuffer.substr(0, totalLen);
-        _recvBuffer.erase(0, totalLen);
-        return oneRequest; // 返回一条完整请求
-    }
-
-    return "";
+    out.channel = channel;
+    out.payload.assign(_recvBuffer.data() + 4, len);
+    _recvBuffer.erase(0, 4u + len);
+    return true;
 }
 
+bool TcpConnection::tryExtractRtsp(std::string& out) {
+    // 找 header 结束
+    size_t headerEnd = _recvBuffer.find("\r\n\r\n");
+    if (headerEnd == std::string::npos) return false;
+
+    const std::string header = _recvBuffer.substr(0, headerEnd + 4);
+
+    // 解析 Content-Length（大小写不敏感，只取该行第一个整数）
+    size_t contentLength = 0;
+    {
+        // 粗暴逐行找
+        size_t pos = 0;
+        while (pos < header.size()) {
+            size_t eol = header.find("\r\n", pos);
+            std::string line = header.substr(pos, (eol == std::string::npos ? header.size() : eol) - pos);
+            // 去掉前导空白
+            size_t i = 0; while (i < line.size() && std::isspace((unsigned char)line[i])) ++i;
+            std::string ltrim = line.substr(i);
+
+            if (iequals_prefix(ltrim, "content-length:")) {
+                size_t j = std::string("content-length:").size();
+                // 跳空白
+                while (j < ltrim.size() && std::isspace((unsigned char)ltrim[j])) ++j;
+                // 读取数字
+                size_t k = j;
+                while (k < ltrim.size() && std::isdigit((unsigned char)ltrim[k])) ++k;
+                try {
+                    if (k > j) contentLength = static_cast<size_t>(std::stoul(ltrim.substr(j, k - j)));
+                } catch (...) {
+                    contentLength = 0;
+                }
+                break;
+            }
+            if (eol == std::string::npos) break;
+            pos = eol + 2;
+        }
+    }
+    size_t tpos = _recvBuffer.rfind("TEARDOWN");
+    if(tpos != std::string::npos){//找到了TEARDOWN
+        size_t total =  headerEnd - tpos + 4;
+        out.assign(_recvBuffer.data() + tpos,total);
+        _recvBuffer.erase();
+    }else{
+        size_t total = headerEnd + 4 + contentLength;
+        if (_recvBuffer.size() < total) return false; // body 未收全
+        out.assign(_recvBuffer.data(), total);
+        _recvBuffer.erase(0, total);
+    }       
+    return true;
+}
+
+RecvItem TcpConnection::recvOneItem() {
+    char temp[8192];
+    int n = ::recv(_sock.fd(), temp, sizeof(temp), 0);
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return {}; // 没有数据
+        LOG_ERROR("Error reading from fd %d: %s", getFd(), strerror(errno));
+        return {};
+    } else if (n == 0) {
+        LOG_DEBUG("Peer closed fd %d", getFd());
+        return {};//连接关闭
+    }
+    _recvBuffer.append(temp, n);
+    std::string req;
+    InterleavedFrame fr;
+    if(tryExtractRtsp(req)){
+        RecvItem item;
+        item.type = RecvItemType::RtspRequest;
+        item.rtsp = std::move(req);
+        return item;
+    }else if (tryExtractInterleaved(fr)) {
+        RecvItem item;
+        item.type = RecvItemType::InterleavedFrame;
+        item.frame = std::move(fr);
+        return item;
+    }else{
+        std::string prefix = _recvBuffer.substr(0, std::min(_recvBuffer.size(), (size_t)50));
+        for(char& c : prefix) if (!std::isprint((unsigned char)c)) c = '.';
+        LOG_DEBUG("Buffer contains incomplete data or unknown format. Size: %zu. Prefix: %s", _recvBuffer.size(), prefix.c_str());
+        return {};
+    }
+}
 
 string TcpConnection::toString(){
     ostringstream oss;
@@ -202,7 +309,7 @@ void TcpConnection::setCloseCallback(const TcpConnectionCallback &cb){
 // }
 void TcpConnection::handleMessageCallback(){
     if(_onMessageCb){
-        LOG_DEBUG("Executing message callback for fd %d", getFd());
+        // LOG_DEBUG("Executing message callback for fd %d", getFd());
         _onMessageCb(shared_from_this());
     }else{
         LOG_WARN("Message callback is null for fd %d", getFd());

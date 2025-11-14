@@ -67,6 +67,7 @@ public:
     void removeTimer(TimerId timerId);
 
     void handleWriteCallback(); // 写事件回调
+    RecvItem recvOneItem();
     
 private:
     EventLoop *_loop;
@@ -88,6 +89,8 @@ private:
     // TcpConnectionCallback _onNewConnectionCb;
     TcpConnectionCallback _onMessageCb;
     TcpConnectionCallback _onCloseCb;
+    bool tryExtractInterleaved(InterleavedFrame& out);
+    bool tryExtractRtsp(std::string& out);
 };
 
 

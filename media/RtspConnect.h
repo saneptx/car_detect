@@ -35,6 +35,7 @@ public:
     RtspState getState() const { return _state; }
     
     void releaseSession();
+    void onInterleavedFrame(uint8_t ch, const uint8_t* data, size_t len);
     
 private:
     // 解析RTSP请求
@@ -44,7 +45,9 @@ private:
     // 提取CSeq
     int extractCSeq(const std::map<std::string, std::string>& headers);
     
-    
+    // 处理OPITIONS请求
+    void handleOpitions(const std::string& request,
+        const std::map<std::string, std::string>& headers, int cseq);
     // 处理ANNOUNCE请求（推流场景）
     void handleAnnounce(const std::string& request,
                         const std::map<std::string, std::string>& headers, int cseq);

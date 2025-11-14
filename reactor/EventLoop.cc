@@ -186,10 +186,11 @@ void EventLoop::handleMessage(int fd){
             itTcp->second->handleCloseCallback();
             removeTcpConnection(itTcp->second);
         }else{
+            // LOG_DEBUG("HandleMessage TCP Message fd: %d", fd);
             itTcp->second->handleMessageCallback();
         }
     }else if(itUdp != _udpConns.end()){
-        LOG_DEBUG("HandleMessage fd: %d", fd);
+        LOG_DEBUG("HandleMessage UDP Message fd: %d", fd);
         itUdp->second->handleMessageCallback();//处理udp消息
     }else{
         LOG_ERROR("Connection not found for fd: %d", fd);
