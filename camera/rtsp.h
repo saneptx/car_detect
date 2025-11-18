@@ -50,7 +50,6 @@ typedef struct rtsp_session {
     size_t sps_size;
     uint8_t *pps;
     size_t pps_size;
-    bool sps_pps_sent;  /* 标记SPS/PPS是否已发送过 */
     char transType[32];
 } rtsp_session_t;
 
@@ -65,10 +64,6 @@ void build_rtp_header(uint8_t *header, uint16_t seq, uint32_t timestamp,
 /* 发送RTP包（包含H264 NAL单元） */
 int send_rtp_over_tcp(rtsp_session_t *sess, const uint8_t *rtp_data,
         size_t rtp_len, uint8_t channel);
-void send_stap_a(rtsp_session_t *session, uint32_t *timestamp,
-    const uint8_t *sps, size_t sps_size,
-    const uint8_t *pps, size_t pps_size,
-    const uint8_t *idr, size_t idr_size);
 void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
     const uint8_t *nalu, size_t nalu_size);
 void send_h264_frame(rtsp_session_t *session, uint32_t *timestamp,
