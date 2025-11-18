@@ -8,7 +8,7 @@
 #include <ctime>
 #include <cstring>
 #include "RtpH264Unpacker.h"
-// #include "RtpH264Mp4Recorder.h"
+#include "MonitorServer.h"
 
 SessionManager RtspConnect::_sessionManager;
 
@@ -22,7 +22,13 @@ RtspConnect::RtspConnect(std::shared_ptr<TcpConnection> tcpConn, EventLoop* loop
     _session.sessionId = _sessionManager.generateSessionId();
     _session.lastActive = std::chrono::steady_clock::now();
     _sessionManager.addSession(_session);
-    _RtpUnpacker = std::make_unique<RtpH264Unpacker>("output.h264");
+    _RtpUnpacker = std::make_unique<RtpH264Unpacker>();
+    // 默认流名称先用会话ID，可在解析 URL 后覆盖
+    _session.setStreamName(_session.sessionId);
+    // 将解出的 H264 NALU 转发给监控服务器（供 Qt 客户端使用）
+    _RtpUnpacker->setNaluCallback([this](const uint8_t *data, size_t len, uint32_t ts) {
+        MonitorServer::instance().onNalu(_session.getStreamName(), data, len, ts);
+    });
     LOG_INFO("RtspConnect created - Session: %s, Client: %s", 
              _session.sessionId.c_str(), _clientIp.c_str());
 }
@@ -123,6 +129,40 @@ void RtspConnect::handleAnnounce(const std::string& request,
     } else {
         LOG_DEBUG("Received SDP via ANNOUNCE:\n%s", _sdp.c_str());
     }
+    // 从 ANNOUNCE 的第一行里提取 URL，设置流名称（已弃用）
+    // {
+    //     std::istringstream iss(request);
+    //     std::string line;
+    //     if (std::getline(iss, line)) {
+    //         std::istringstream rl(line);
+    //         std::string method, url, version;
+    //         rl >> method >> url >> version;
+    //         if (!url.empty()) {
+    //             // 提取路径最后一段作为 streamName
+    //             std::string path = url;
+    //             auto pos = path.find("://");
+    //             if (pos != std::string::npos) {
+    //                 pos = path.find('/', pos + 3);
+    //                 if (pos != std::string::npos) {
+    //                     path = path.substr(pos + 1);
+    //                 }
+    //             } else if (!path.empty() && path[0] == '/') {
+    //                 path = path.substr(1);
+    //             }
+    //             // 去掉 query
+    //             auto qpos = path.find('?');
+    //             if (qpos != std::string::npos) {
+    //                 path = path.substr(0, qpos);
+    //             }
+    //             if (!path.empty()) {
+    //                 _session.setStreamName(path);
+    //                 LOG_INFO("Set stream name to '%s' for session %s",
+    //                          path.c_str(), _session.sessionId.c_str());
+    //             }
+    //         }
+    //     }
+    // }
+
     std::map<std::string, std::string> extraHeaders;
     sendResponse(200, "OK", extraHeaders, cseq);
 }
@@ -172,7 +212,7 @@ void RtspConnect::handleSetup(const std::string& url,
             // _session.videoRtcpConn = std::make_shared<UdpConnection>(_serverIp,serverRtcpPort
             //     ,InetAddress(_clientIp,clientRtcpPort),_loop);
             _loop->addUdpConnection(_session.videoRtpConn);
-            _loop->addUdpConnection(_session.videoRtcpConn);
+            // _loop->addUdpConnection(_session.videoRtcpConn);
             _session.videoRtpConn->setMessageCallback([this](const UdpConnectionPtr &conn){
                 uint8_t buffer[1500];
                 while (true) {
@@ -261,16 +301,6 @@ void RtspConnect::handleRecord(const std::string& url,
     std::map<std::string, std::string> extraHeaders;
     extraHeaders["Session"] = _session.sessionId;
     sendResponse(200, "OK", extraHeaders, cseq);
-
-
-    // _session.videoRtpConn->setMessageCallback([this](const UdpConnectionPtr &conn){
-    //     uint8_t buffer[1500];
-    //     while (true) {
-    //         int n = conn->recv(buffer, sizeof(buffer));
-    //         if (n <= 0) break;
-    //         _RtpUnpacker->handleRtpPacket(buffer,n);
-    //     }
-    // });
 }
 
 void RtspConnect::handleTeardown(const std::string& url,

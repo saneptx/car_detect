@@ -19,6 +19,9 @@ struct RtspSession{
     std::shared_ptr<UdpConnection> audioRtpConn = nullptr;
     std::shared_ptr<UdpConnection> audioRtcpConn = nullptr;
     std::string transportType;
+    std::string stringName;
+    void setStreamName(const std::string &name) { this->stringName = name; }
+    const std::string &getStreamName() const { return this->stringName; }
 };
 
 class SessionManager{

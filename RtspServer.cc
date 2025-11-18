@@ -3,6 +3,7 @@
 #include <signal.h>
 #include "reactor/cpp11_compat.h"
 #include "reactor/Logger.h"
+#include "media/MonitorServer.h"
 
 std::unique_ptr<MultiThreadEventLoop> g_server;
 // std::atomic_bool g_stopFlag{false};
@@ -18,6 +19,10 @@ int main() {
 
     LOG_INFO("Starting Multi-Thread RTSP Server...");
     g_server = std::make_unique<MultiThreadEventLoop>("192.168.5.11", 8554, 4);
+
+    // 启动监控 TCP 服务（独立线程），供 Qt 客户端连接
+    // 这里固定监听 9000 端口，Qt 端用 server_ip:9000 连接
+    MonitorServer::instance().start("192.168.5.11", 9000);
 
     try {
         // 启动（内部会主 loop 阻塞）

@@ -1,15 +1,16 @@
 #include "RtpH264Unpacker.h"
 #include "Logger.h"
 
-RtpH264Unpacker::RtpH264Unpacker(const std::string &outputFile) {
-    _out.open(outputFile, std::ios::binary);
-    if (!_out) throw std::runtime_error("Failed to open output file");
-    std::cout << "[Unpacker] Initialized, writing to " << outputFile << std::endl;
+RtpH264Unpacker::RtpH264Unpacker() {
 }
 
 RtpH264Unpacker::~RtpH264Unpacker() {
     flush();
-    if (_out.is_open()) _out.close();
+}
+
+void RtpH264Unpacker::setNaluCallback(H264NaluCallback cb) {
+    std::lock_guard<std::mutex> lock(_mtx);
+    _callback = std::move(cb);
 }
 
 void RtpH264Unpacker::handleRtpPacket(const uint8_t *data, size_t len) {
@@ -24,7 +25,7 @@ void RtpH264Unpacker::handleRtpPacket(const uint8_t *data, size_t len) {
 
     // 检查重复
     if (_reorderBuf.count(seq)) {
-        std::cout << "[Unpacker] Duplicate seq=" << seq << " dropped.\n";
+        LOG_DEBUG("Duplicate seq=%d",seq);
         return;
     }
 
@@ -60,7 +61,7 @@ void RtpH264Unpacker::processPacket(const RtpPacket &pkt) {
 
     if (nalType >= 1 && nalType <= 23) {
         // 单包NALU
-        outputNalu(nalType, pkt.payload);
+        outputNalu(nalType, pkt.payload, pkt.timestamp);
     } else if (nalType == 28) {
         // FU-A 分片
         handleFuA(pkt);
@@ -90,19 +91,31 @@ void RtpH264Unpacker::handleFuA(const RtpPacket &pkt) {
     } else if (_assembling && pkt.timestamp == _currentTimestamp) {
         _assemblingBuf.insert(_assemblingBuf.end(), pkt.payload.begin() + 2, pkt.payload.end());
         if (end) {
-            _out.write(reinterpret_cast<const char*>(_assemblingBuf.data()), _assemblingBuf.size());
+            // 回调给外部
+            if (_callback) {
+                _callback(_assemblingBuf.data(), _assemblingBuf.size(), _currentTimestamp);
+            }
             _assembling = false;
         }
     } else {
-        std::cout << "[Unpacker][WARN] FU-A fragment TS mismatch or missing start; dropped.\n";
+        LOG_DEBUG("FU-A fragment TS mismatch or missing start; dropped.");
         _assembling = false;
     }
 }
 
-void RtpH264Unpacker::outputNalu(uint8_t nalType, const std::vector<uint8_t> &data) {
+void RtpH264Unpacker::outputNalu(uint8_t /*nalType*/, const std::vector<uint8_t> &data, uint32_t timestamp) {
     static const uint8_t startCode[4] = {0x00, 0x00, 0x00, 0x01};
-    _out.write(reinterpret_cast<const char*>(startCode), 4);
-    _out.write(reinterpret_cast<const char*>(data.data()), data.size());
+    // 写文件
+    // _out.write(reinterpret_cast<const char*>(startCode), 4);
+    // _out.write(reinterpret_cast<const char*>(data.data()), data.size());
+    // 回调给外部（包括起始码）
+    if (_callback) {
+        std::vector<uint8_t> buf;
+        buf.reserve(4 + data.size());
+        buf.insert(buf.end(), startCode, startCode + 4);
+        buf.insert(buf.end(), data.begin(), data.end());
+        _callback(buf.data(), buf.size(), timestamp);
+    }
 }
 
 void RtpH264Unpacker::flush() {

@@ -18,7 +18,7 @@ static inline bool iequals_prefix(const std::string& s, const std::string& key) 
     return true;
 }
 
-TcpConnection::TcpConnection(int fd,EventLoop* loop)
+TcpConnection::TcpConnection(EventLoop* loop, int fd)
 :_loop(loop)
 ,_sockIO(fd)
 ,_sock(fd)

@@ -35,7 +35,7 @@ class TcpConnection
     using TcpConnectionPtr = shared_ptr<TcpConnection>;
     using TcpConnectionCallback = function<void(const TcpConnectionPtr &)>;
 public:
-    explicit TcpConnection(int fd,EventLoop *loop);
+    explicit TcpConnection(EventLoop *loop, int fd);
     ~TcpConnection();
     void send(const string &msg);
     void sendInLoop(const string &msg);

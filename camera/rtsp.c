@@ -88,7 +88,6 @@ int send_rtp_over_tcp(rtsp_session_t *sess, const uint8_t *rtp_data, size_t rtp_
     pthread_mutex_unlock(&sess->rtp_send_mtx);
     // 发送完成后释放内存
     free(buffer);
-
     return ret;
 }
 
