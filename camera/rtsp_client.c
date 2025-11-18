@@ -92,10 +92,6 @@ void *video_stream_thread(void *arg) {
         }
         /* 将缓冲区放回队列 */
         v4l2_qbuf(&buf);
-        
-        /* 控制帧率 */
-        // usleep(1000000 / DEFAULT_FPS);
-
     }
     printf("视频流线程退出\n");
     return NULL;

@@ -103,7 +103,7 @@ void MonitorServer::onNalu(const std::string &streamName,
     // 发送给所有已连接客户端；若发送失败则移除该客户端
     std::set<int> badFds;
     for (int fd : _clients) {
-        ssize_t n = ::send(fd, buf.data(), buf.size(), MSG_NOSIGNAL);
+        ssize_t n = ::send(fd, buf.data(), buf.size(), MSG_NOSIGNAL|MSG_DONTWAIT);
         if (n < 0) {
             LOG_WARN("MonitorServer send failed on fd %d: %s", fd, strerror(errno));
             badFds.insert(fd);

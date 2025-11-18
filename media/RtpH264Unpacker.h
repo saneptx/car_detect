@@ -39,9 +39,7 @@ private:
     void processPacket(const RtpPacket &pkt);
     void handleFuA(const RtpPacket &pkt);
     void outputNalu(uint8_t nalType, const std::vector<uint8_t> &data, uint32_t timestamp);
-
-    std::ofstream _out;
-    std::mutex _mtx;
+    void drainBuffer(bool forceLossRecovery);
 
     // RTP 重排缓存
     static constexpr size_t MAX_BUFFER = 64;
