@@ -113,16 +113,10 @@ EventLoop* MultiThreadEventLoop::getNextLoop() {
     return _subLoops[index].get();
 }
 
-// void MultiThreadEventLoop::threadFunc() {
-//     // 这个方法现在不再使用，线程启动逻辑已移到start()中的lambda表达式
-//     // 保留此方法以防其他地方调用，但应该不会执行到这里
-//     LOG_WARN("threadFunc() called but should not be reached");
-// }
-
 void MultiThreadEventLoop::onNewConnection(int connfd) {
     EventLoop* loop = getNextLoop();
     loop->runInLoop([connfd, loop, this]() {
-        TcpConnectionPtr connPtr(new TcpConnection(connfd, loop));
+        TcpConnectionPtr connPtr(new TcpConnection(loop, connfd));
         LOG_DEBUG("Created TcpConnection for fd: %d", connfd);
         loop->addTcpConnection(connPtr);
         connPtr->setMessageCallback(
@@ -158,45 +152,8 @@ void MultiThreadEventLoop::onMessage(const TcpConnectionPtr& conn) {
                                     (const uint8_t*)item.frame.payload.data(),
                                     item.frame.payload.size());
     }
-
-    
-
-
-    // RecvItem item = conn->recvOneItem();
-    // if (item.type == RecvItemType::None) return;
-    // if (item.type == RecvItemType::RtspRequest) {
-    //     LOG_DEBUG("Handling RTSP request (%zu bytes)", item.rtsp.size());
-    //     rtspConn->handleRequest(item.rtsp);
-    // } else if (item.type == RecvItemType::InterleavedFrame) {
-    //     // 交给会话对象分发：channel 偶数一般 RTP，奇数 RTCP
-    //     // 你可以在内部根据 channel 绑定到具体 track
-    //     // 例如: 0/1->video RTP/RTCP, 2/3->audio RTP/RTCP
-    //     // onInterleavedRtp(uint8_t ch, const uint8_t* data, size_t len)
-    //     LOG_DEBUG("Handling RTP Over TCP Data");
-    //     rtspConn->onInterleavedFrame(item.frame.channel,
-    //                                 (const uint8_t*)item.frame.payload.data(),
-    //                                 item.frame.payload.size());
-    // }
 }
 
-// void MultiThreadEventLoop::onMessage(const TcpConnectionPtr& connPtr) {
-//     LOG_DEBUG("Received message from connection: %s", connPtr->toString().c_str());
-    
-//     // 接收RTSP请求
-//     std::string request = connPtr->reciveRtspRequest();
-//     if (request.empty()) {
-//         // 连接可能已关闭或数据不完整
-//         LOG_DEBUG("Empty RTSP request received, connection may be closed");
-//         return;
-//     }
-//     auto rtspConn = connPtr->getRtspConnect();
-//     if (rtspConn) {
-//         LOG_DEBUG("Handling RTSP request");
-//         rtspConn->handleRequest(request);
-//     } else {
-//         LOG_WARN("No RTSP connection found for: %s", connPtr->toString().c_str());
-//     }
-// }
 
 void MultiThreadEventLoop::onClose(const TcpConnectionPtr& connPtr) {
     LOG_INFO("Connection closed: %s", connPtr->toString().c_str());
