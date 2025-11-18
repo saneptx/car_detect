@@ -266,9 +266,11 @@ int h264_encoder_init(h264_encoder_t *encoder, int width, int height, int fps) {
     param.i_height = height;
     param.i_fps_num = fps;
     param.i_fps_den = 1;
-    param.i_keyint_max = fps * 2;
+    param.i_keyint_max = fps;
+    param.i_keyint_min = fps;
     param.i_threads = 1;
     param.b_annexb = 1;  /* 使用Annex-B格式（包含0x00000001起始码） */
+    param.b_repeat_headers = 1; /* 每个IDR重复 SPS/PPS，便于新客户端加入 */
     
     x264_param_apply_profile(&param, "baseline");
     

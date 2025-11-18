@@ -6,6 +6,8 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <time.h>
 #include "log.h"
 
 #define DEFAULT_WIDTH 640
@@ -363,4 +365,3 @@ cleanup:
     printf("程序退出\n");
     return 0;
 }
-

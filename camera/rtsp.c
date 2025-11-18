@@ -20,7 +20,6 @@ int rtsp_session_init(rtsp_session_t *session) {
     session->sps_size = 0;
     session->pps = NULL;
     session->pps_size = 0;
-    session->sps_pps_sent = false;
     return 0;
 }
 
@@ -91,49 +90,13 @@ int send_rtp_over_tcp(rtsp_session_t *sess, const uint8_t *rtp_data, size_t rtp_
     return ret;
 }
 
-void send_stap_a(rtsp_session_t *session, uint32_t *timestamp,
-    const uint8_t *sps, size_t sps_size,
-    const uint8_t *pps, size_t pps_size,
-    const uint8_t *idr, size_t idr_size){
-    uint8_t payload[MTU];
-    size_t offset = 0;
-
-    // STAP-A header
-    uint8_t stap_header = (idr[0] & 0x60) | 24;
-    payload[offset++] = stap_header;
-
-    // Append SPS
-    payload[offset++] = (sps_size >> 8) & 0xFF;
-    payload[offset++] = sps_size & 0xFF;
-    memcpy(payload + offset, sps, sps_size);
-    offset += sps_size;
-
-    // Append PPS
-    payload[offset++] = (pps_size >> 8) & 0xFF;
-    payload[offset++] = pps_size & 0xFF;
-    memcpy(payload + offset, pps, pps_size);
-    offset += pps_size;
-
-    // Append IDR
-    payload[offset++] = (idr_size >> 8) & 0xFF;
-    payload[offset++] = idr_size & 0xFF;
-    memcpy(payload + offset, idr, idr_size);
-    offset += idr_size;
-
-    // 构建RTP Header
-    uint8_t rtp_header[RTP_HEADER_SIZE];
-    uint16_t seq = next_seq(session);
-    build_rtp_header(rtp_header, seq, *timestamp, session->rtp_ssrc, 96, true);
-
-    // 合并Header + Payload
-    uint8_t packet[MTU];
-    memcpy(packet, rtp_header, RTP_HEADER_SIZE);
-    memcpy(packet + RTP_HEADER_SIZE, payload, offset);
-    size_t total_len = RTP_HEADER_SIZE + offset;
-    if (strcmp(session->transType, "tcp") == 0)
-        send_rtp_over_tcp(session, packet, total_len, session->rtpChannel);
-    else
-        udp_send(&session->rtp_socket, packet, total_len);
+static void send_parameter_sets(rtsp_session_t *session, uint32_t *timestamp) {
+    if (session->sps && session->sps_size > 0) {
+        send_h264_frame(session, timestamp, session->sps, session->sps_size);
+    }
+    if (session->pps && session->pps_size > 0) {
+        send_h264_frame(session, timestamp, session->pps, session->pps_size);
+    }
 }
 
 void send_h264_frame(rtsp_session_t *session, uint32_t *timestamp,
@@ -210,9 +173,7 @@ void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
         if (!session->sps) return;
         memcpy(session->sps, nalu, nalu_size);
         session->sps_size = nalu_size;
-        // 如果SPS变化，重置已发送标记（因为新的SPS需要重新发送）
-        session->sps_pps_sent = false;
-        return;  // 只缓存，不立即发送
+        send_h264_frame(session, timestamp, nalu, nalu_size);
     } else if (nalu_type == 8) { // PPS
         // 更新PPS缓存
         if (session->pps) {
@@ -224,26 +185,11 @@ void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
         if (!session->pps) return;
         memcpy(session->pps, nalu, nalu_size);
         session->pps_size = nalu_size;
-        // 如果PPS变化，重置已发送标记（因为新的PPS需要重新发送）
-        session->sps_pps_sent = false;
-        return;
+        send_h264_frame(session, timestamp, nalu, nalu_size);
     } else if (nalu_type == 5) { // IDR 帧（关键帧）
-        // 只有在SPS/PPS未发送过，或者SPS/PPS已更新时才发送
-        if (session->sps_size > 0 && session->pps_size > 0 && !session->sps_pps_sent) {
-            size_t total = 1 + (2 + session->sps_size) + (2 + session->pps_size) + (2 + nalu_size);
-            if (total + RTP_HEADER_SIZE <= MTU) {
-                send_stap_a(session, timestamp, session->sps, session->sps_size, 
-                           session->pps, session->pps_size, nalu, nalu_size);
-            } else {
-                send_h264_frame(session, timestamp, session->sps, session->sps_size);
-                send_h264_frame(session, timestamp, session->pps, session->pps_size);
-                send_h264_frame(session, timestamp, nalu, nalu_size);
-            }
-            session->sps_pps_sent = true;  // 标记已发送
-        } else {
-            // SPS/PPS已发送过，只发送IDR帧
-            send_h264_frame(session, timestamp, nalu, nalu_size);
-        }
+        // 每个IDR之前都发送一次SPS/PPS，确保任何新订阅者都能解码
+        send_parameter_sets(session, timestamp);
+        send_h264_frame(session, timestamp, nalu, nalu_size);
     } else {
         // 其他类型的NALU直接发送
         send_h264_frame(session, timestamp, nalu, nalu_size);
@@ -269,7 +215,6 @@ void rtsp_session_cleanup(rtsp_session_t *session) {
     udp_close(&session->rtp_socket);
     tcp_close_client(&session->client);
     session->state = RTSP_STATE_INIT;
-    session->sps_pps_sent = false;
 }
 
 /* ========== RTSP客户端功能实现 ========== */
