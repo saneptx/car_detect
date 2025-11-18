@@ -8,6 +8,8 @@
 #include <mutex>
 #include <iostream>
 #include <functional>
+#include <unordered_map>
+#include <chrono>
 
 struct RtpPacket {
     uint16_t seq = 0;
@@ -39,7 +41,6 @@ private:
     void processPacket(const RtpPacket &pkt);
     void handleFuA(const RtpPacket &pkt);
     void outputNalu(uint8_t nalType, const std::vector<uint8_t> &data, uint32_t timestamp);
-    void drainBuffer(bool forceLossRecovery);
 
     // RTP 重排缓存
     static constexpr size_t MAX_BUFFER = 64;

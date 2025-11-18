@@ -6,6 +6,19 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
+#include <chrono>
+
+namespace {
+inline uint64_t hostToNetwork64(uint64_t value) {
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    uint32_t high = htonl(static_cast<uint32_t>(value >> 32));
+    uint32_t low  = htonl(static_cast<uint32_t>(value & 0xFFFFFFFFULL));
+    return (static_cast<uint64_t>(low) << 32) | high;
+#else
+    return value;
+#endif
+}
+}
 
 MonitorServer &MonitorServer::instance() {
     static MonitorServer inst;
@@ -87,8 +100,12 @@ void MonitorServer::onNalu(const std::string &streamName,
     uint32_t tsNet = htonl(ts);
     uint32_t frameLenNet = htonl(frameLen);
 
+    uint64_t sendTimeUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::system_clock::now().time_since_epoch()).count();
+    uint64_t sendTimeNet = hostToNetwork64(sendTimeUs);
+
     std::string buf;
-    buf.resize(sizeof(nameLenNet) + nameLen + sizeof(tsNet) + sizeof(frameLenNet) + frameLen);
+    buf.resize(sizeof(nameLenNet) + nameLen + sizeof(tsNet) + sizeof(frameLenNet) + sizeof(sendTimeNet) + frameLen);
     size_t offset = 0;
     std::memcpy(&buf[offset], &nameLenNet, sizeof(nameLenNet));
     offset += sizeof(nameLenNet);
@@ -98,6 +115,8 @@ void MonitorServer::onNalu(const std::string &streamName,
     offset += sizeof(tsNet);
     std::memcpy(&buf[offset], &frameLenNet, sizeof(frameLenNet));
     offset += sizeof(frameLenNet);
+    std::memcpy(&buf[offset], &sendTimeNet, sizeof(sendTimeNet));
+    offset += sizeof(sendTimeNet);
     std::memcpy(&buf[offset], data, frameLen);
 
     // 发送给所有已连接客户端；若发送失败则移除该客户端

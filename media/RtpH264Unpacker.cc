@@ -33,7 +33,9 @@ void RtpH264Unpacker::handleRtpPacket(const uint8_t *data, size_t len) {
 
     // 控制缓存大小
     if (_reorderBuf.size() > MAX_BUFFER) {
-        drainBuffer(true);
+        uint16_t firstSeq = _reorderBuf.begin()->first;
+        processPacket(_reorderBuf[firstSeq]);
+        _reorderBuf.erase(firstSeq);
     }
 
     // 按序号连续输出
@@ -42,7 +44,11 @@ void RtpH264Unpacker::handleRtpPacket(const uint8_t *data, size_t len) {
         _firstPacket = false;
     }
 
-    drainBuffer(false);
+    while (_reorderBuf.count(_expectedSeq)) {
+        processPacket(_reorderBuf[_expectedSeq]);
+        _reorderBuf.erase(_expectedSeq);
+        _expectedSeq++;
+    }
 }
 
 void RtpH264Unpacker::processPacket(const RtpPacket &pkt) {
@@ -112,27 +118,4 @@ void RtpH264Unpacker::flush() {
         processPacket(kv.second);
     }
     _reorderBuf.clear();
-}
-
-void RtpH264Unpacker::drainBuffer(bool forceLossRecovery) {
-    while (!_reorderBuf.empty()) {
-        auto it = _reorderBuf.find(_expectedSeq);
-        if (it != _reorderBuf.end()) {
-            processPacket(it->second);
-            _reorderBuf.erase(it);
-            _expectedSeq++;
-            continue;
-        }
-
-        if (!forceLossRecovery) {
-            break;
-        }
-
-        auto firstIt = _reorderBuf.begin();
-        if (_expectedSeq != firstIt->first) {
-            LOG_WARN("RTP loss detected, skip from seq=%u to seq=%u",
-                     _expectedSeq, firstIt->first);
-        }
-        _expectedSeq = firstIt->first;
-    }
 }

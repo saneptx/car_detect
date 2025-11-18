@@ -1,4 +1,6 @@
 #include "monitorclientwidget.h"
+<<<<<<< ours
+<<<<<<< ours
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QDebug>
@@ -6,7 +8,21 @@
 #include <QNetworkProxy>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QMutexLocker>
+#include <QDateTime>
+#include <QElapsedTimer>
 #include <algorithm>
+=======
+=======
+>>>>>>> theirs
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QDebug>
+#include <QtEndian>
+#include <QNetworkProxy>
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 
 static const char *SERVER_IP   = "192.168.5.11";
 static const quint16 SERVER_PORT = 9000;
@@ -73,13 +89,20 @@ void MonitorClientWidget::processBuffer()
             reinterpret_cast<const uchar*>(_buffer.constData() + offset));
         offset += 4;
 
+        if (_buffer.size() < offset + 8 + int(frameLen))
+            return;
+
+        quint64 sendTimeUs = qFromBigEndian<quint64>(
+            reinterpret_cast<const uchar*>(_buffer.constData() + offset));
+        offset += 8;
+
         if (_buffer.size() < offset + int(frameLen))
             return;
 
         QByteArray frame = _buffer.mid(offset, frameLen);
         _buffer.remove(0, offset + frameLen);
 
-        handleFrame(streamName, frame, ts);
+        handleFrame(streamName, frame, ts, sendTimeUs);
     }
 }
 
@@ -115,7 +138,8 @@ void MonitorClientWidget::processBuffer()
 //}
 
 void MonitorClientWidget::handleFrame(const QString &streamName,
-                                      const QByteArray &frame, quint32 ts)
+                                      const QByteArray &frame, quint32 ts,
+                                      quint64 sendTimeUs)
 {
     // 没有窗口/解码器就创建
     if (!_videoWidgets.contains(streamName)) {
@@ -131,6 +155,8 @@ void MonitorClientWidget::handleFrame(const QString &streamName,
         _grid->addWidget(label, row, col);
         _videoWidgets[streamName] = label;
 
+<<<<<<< ours
+<<<<<<< ours
         auto dec = new H264Decoder();
         if (!dec->isOk()) {
             qWarning() << "Decoder init failed for stream" << streamName;
@@ -156,7 +182,12 @@ void MonitorClientWidget::handleFrame(const QString &streamName,
         _decoderLocks[streamName] = lock;
     }
 
-    QtConcurrent::run([this, dec, label, frameCopy, lock, streamName]() {
+    quint64 nowUs = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch() * 1000ULL;
+    quint64 networkDelayUs = (nowUs > sendTimeUs) ? (nowUs - sendTimeUs) : 0;
+
+    QtConcurrent::run([this, dec, label, frameCopy, lock, streamName, networkDelayUs]() {
+        QElapsedTimer decodeTimer;
+        decodeTimer.start();
         {
             QMutexLocker locker(lock.data());
             dec->decode(reinterpret_cast<const uint8_t*>(frameCopy.constData()),
@@ -174,12 +205,61 @@ void MonitorClientWidget::handleFrame(const QString &streamName,
                             }, Qt::QueuedConnection);
                         });
         }
-        QMetaObject::invokeMethod(this, [this, streamName]() {
+        quint64 decodeUs = decodeTimer.nsecsElapsed() / 1000ULL;
+        QMetaObject::invokeMethod(this, [this, streamName, networkDelayUs, decodeUs]() {
             int pending = _pendingDecodes.value(streamName, 0);
             pending = std::max(0, pending - 1);
             _pendingDecodes[streamName] = pending;
+
+            auto stats = _stats.value(streamName);
+            stats.frameCount++;
+            stats.networkDelayAccumUs += networkDelayUs;
+            stats.decodeDelayAccumUs += decodeUs;
+            if (stats.frameCount >= kLogIntervalFrames) {
+                double avgNetMs = (double)stats.networkDelayAccumUs / (double)stats.frameCount / 1000.0;
+                double avgDecodeMs = (double)stats.decodeDelayAccumUs / (double)stats.frameCount / 1000.0;
+                qInfo() << "Stream" << streamName
+                        << "avg network delay" << avgNetMs << "ms, avg decode" << avgDecodeMs << "ms";
+                stats.frameCount = 0;
+                stats.networkDelayAccumUs = 0;
+                stats.decodeDelayAccumUs = 0;
+            }
+            _stats[streamName] = stats;
         }, Qt::QueuedConnection);
     });
 
     Q_UNUSED(ts);
 }
+=======
+=======
+>>>>>>> theirs
+        auto dec = new H264Decoder();
+        if (!dec->isOk()) {
+            qWarning() << "Decoder init failed for stream" << streamName;
+        }
+        _decoders[streamName] = dec;
+    }
+
+    H264Decoder *dec = _decoders.value(streamName, nullptr);
+    QLabel *label = _videoWidgets.value(streamName, nullptr);
+    if (!dec || !label) return;
+
+    // 解码这一帧（目前在 GUI 线程里，先这样用）
+    dec->decode(reinterpret_cast<const uint8_t*>(frame.constData()),
+                frame.size(),
+                [label](const QImage &img) {
+                    // 回调在当前线程执行，这里直接更新即可
+                    if (!img.isNull()) {
+                        QPixmap pix = QPixmap::fromImage(img)
+                                      .scaled(label->size(),
+                                              Qt::KeepAspectRatio,
+                                              Qt::SmoothTransformation);
+                        label->setPixmap(pix);
+                    }
+                });
+    Q_UNUSED(ts);
+}
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
