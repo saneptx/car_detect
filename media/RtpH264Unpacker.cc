@@ -9,13 +9,11 @@ RtpH264Unpacker::~RtpH264Unpacker() {
 }
 
 void RtpH264Unpacker::setNaluCallback(H264NaluCallback cb) {
-    std::lock_guard<std::mutex> lock(_mtx);
     _callback = std::move(cb);
 }
 
 void RtpH264Unpacker::handleRtpPacket(const uint8_t *data, size_t len) {
     if (len < 12) return; // RTP header too short
-    std::lock_guard<std::mutex> lock(_mtx);
     // 解析RTP头
     uint16_t seq = (data[2] << 8) | data[3];
     uint32_t ts = (data[4] << 24) | (data[5] << 16) | (data[6] << 8) | data[7];
@@ -35,9 +33,7 @@ void RtpH264Unpacker::handleRtpPacket(const uint8_t *data, size_t len) {
 
     // 控制缓存大小
     if (_reorderBuf.size() > MAX_BUFFER) {
-        uint16_t firstSeq = _reorderBuf.begin()->first;
-        processPacket(_reorderBuf[firstSeq]);
-        _reorderBuf.erase(firstSeq);
+        drainBuffer(true);
     }
 
     // 按序号连续输出
@@ -46,11 +42,7 @@ void RtpH264Unpacker::handleRtpPacket(const uint8_t *data, size_t len) {
         _firstPacket = false;
     }
 
-    while (_reorderBuf.count(_expectedSeq)) {
-        processPacket(_reorderBuf[_expectedSeq]);
-        _reorderBuf.erase(_expectedSeq);
-        _expectedSeq++;
-    }
+    drainBuffer(false);
 }
 
 void RtpH264Unpacker::processPacket(const RtpPacket &pkt) {
@@ -66,7 +58,7 @@ void RtpH264Unpacker::processPacket(const RtpPacket &pkt) {
         // FU-A 分片
         handleFuA(pkt);
     } else {
-        std::cout << "[Unpacker] Unsupported NAL type: " << (int)nalType << "\n";
+        LOG_WARN("Unsupported NAL type:%d",(int)nalType);
     }
 }
 
@@ -105,9 +97,6 @@ void RtpH264Unpacker::handleFuA(const RtpPacket &pkt) {
 
 void RtpH264Unpacker::outputNalu(uint8_t /*nalType*/, const std::vector<uint8_t> &data, uint32_t timestamp) {
     static const uint8_t startCode[4] = {0x00, 0x00, 0x00, 0x01};
-    // 写文件
-    // _out.write(reinterpret_cast<const char*>(startCode), 4);
-    // _out.write(reinterpret_cast<const char*>(data.data()), data.size());
     // 回调给外部（包括起始码）
     if (_callback) {
         std::vector<uint8_t> buf;
@@ -119,9 +108,31 @@ void RtpH264Unpacker::outputNalu(uint8_t /*nalType*/, const std::vector<uint8_t>
 }
 
 void RtpH264Unpacker::flush() {
-    std::lock_guard<std::mutex> lock(_mtx);
     for (auto &kv : _reorderBuf) {
         processPacket(kv.second);
     }
     _reorderBuf.clear();
+}
+
+void RtpH264Unpacker::drainBuffer(bool forceLossRecovery) {
+    while (!_reorderBuf.empty()) {
+        auto it = _reorderBuf.find(_expectedSeq);
+        if (it != _reorderBuf.end()) {
+            processPacket(it->second);
+            _reorderBuf.erase(it);
+            _expectedSeq++;
+            continue;
+        }
+
+        if (!forceLossRecovery) {
+            break;
+        }
+
+        auto firstIt = _reorderBuf.begin();
+        if (_expectedSeq != firstIt->first) {
+            LOG_WARN("RTP loss detected, skip from seq=%u to seq=%u",
+                     _expectedSeq, firstIt->first);
+        }
+        _expectedSeq = firstIt->first;
+    }
 }
