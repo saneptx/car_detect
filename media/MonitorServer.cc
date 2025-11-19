@@ -8,17 +8,6 @@
 #include <cstring>
 #include <chrono>
 
-namespace {
-inline uint64_t hostToNetwork64(uint64_t value) {
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-    uint32_t high = htonl(static_cast<uint32_t>(value >> 32));
-    uint32_t low  = htonl(static_cast<uint32_t>(value & 0xFFFFFFFFULL));
-    return (static_cast<uint64_t>(low) << 32) | high;
-#else
-    return value;
-#endif
-}
-}
 
 MonitorServer &MonitorServer::instance() {
     static MonitorServer inst;
@@ -85,44 +74,26 @@ void MonitorServer::acceptLoop(const std::string &ip, unsigned short port) {
 }
 
 void MonitorServer::onNalu(const std::string &streamName,
-                           const uint8_t *data, size_t len,
-                           uint32_t timestamp) {
+                           const uint8_t *data, size_t len) {
     if (streamName.empty() || !data || len == 0) return;
 
     std::lock_guard<std::mutex> lock(_mtx);
     if (_clients.empty()) return;
-
-    uint16_t nameLen = static_cast<uint16_t>(streamName.size());
-    uint32_t ts = timestamp;
-    uint32_t frameLen = static_cast<uint32_t>(len);
-
-    uint16_t nameLenNet = htons(nameLen);
-    uint32_t tsNet = htonl(ts);
-    uint32_t frameLenNet = htonl(frameLen);
-
-    uint64_t sendTimeUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                             std::chrono::system_clock::now().time_since_epoch()).count();
-    uint64_t sendTimeNet = hostToNetwork64(sendTimeUs);
-
     std::string buf;
-    buf.resize(sizeof(nameLenNet) + nameLen + sizeof(tsNet) + sizeof(frameLenNet) + sizeof(sendTimeNet) + frameLen);
+    uint16_t nameLen = static_cast<uint16_t>(streamName.size());//长度为10
+    uint16_t nameLenNet = htons(nameLen);
+    buf.resize(sizeof(nameLenNet) + nameLen + len);
     size_t offset = 0;
-    std::memcpy(&buf[offset], &nameLenNet, sizeof(nameLenNet));
+    std::memcpy(&buf[offset],&nameLenNet,sizeof(nameLenNet));
     offset += sizeof(nameLenNet);
-    std::memcpy(&buf[offset], streamName.data(), nameLen);
+    std::memcpy(&buf[offset],streamName.data(),nameLen);
     offset += nameLen;
-    std::memcpy(&buf[offset], &tsNet, sizeof(tsNet));
-    offset += sizeof(tsNet);
-    std::memcpy(&buf[offset], &frameLenNet, sizeof(frameLenNet));
-    offset += sizeof(frameLenNet);
-    std::memcpy(&buf[offset], &sendTimeNet, sizeof(sendTimeNet));
-    offset += sizeof(sendTimeNet);
-    std::memcpy(&buf[offset], data, frameLen);
-
+    std::memcpy(&buf[offset],data,len);
     // 发送给所有已连接客户端；若发送失败则移除该客户端
     std::set<int> badFds;
     for (int fd : _clients) {
         ssize_t n = ::send(fd, buf.data(), buf.size(), MSG_NOSIGNAL|MSG_DONTWAIT);
+        LOG_DEBUG("send %d seq, %d data",(data[6]<<8|data[7]),n);
         if (n < 0) {
             LOG_WARN("MonitorServer send failed on fd %d: %s", fd, strerror(errno));
             badFds.insert(fd);
