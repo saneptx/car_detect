@@ -92,7 +92,7 @@ private:
     std::string _serverIp;
     RtspSession _session;
     std::string _sdp; // 客户端通过ANNOUNCE提供的SDP
-    std::unique_ptr<RtpH264Unpacker> _RtpUnpacker;
+    // std::unique_ptr<RtpH264Unpacker> _RtpUnpacker;
     static SessionManager _sessionManager;
 };
 

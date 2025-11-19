@@ -25,8 +25,7 @@ public:
 
     // 有新的 H264 NALU 到来时调用（线程安全）
     void onNalu(const std::string &streamName,
-                const uint8_t *data, size_t len,
-                uint32_t timestamp);
+                const uint8_t *data, size_t len);
 
 private:
     MonitorServer() = default;

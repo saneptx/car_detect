@@ -7,7 +7,6 @@
 #include <cstdlib>
 #include <ctime>
 #include <cstring>
-#include "RtpH264Unpacker.h"
 #include "MonitorServer.h"
 
 SessionManager RtspConnect::_sessionManager;
@@ -22,13 +21,13 @@ RtspConnect::RtspConnect(std::shared_ptr<TcpConnection> tcpConn, EventLoop* loop
     _session.sessionId = _sessionManager.generateSessionId();
     _session.lastActive = std::chrono::steady_clock::now();
     _sessionManager.addSession(_session);
-    _RtpUnpacker = std::make_unique<RtpH264Unpacker>();
+    // _RtpUnpacker = std::make_unique<RtpH264Unpacker>();
     // 默认流名称先用会话ID，可在解析 URL 后覆盖
     _session.setStreamName(_session.sessionId);
     // 将解出的 H264 NALU 转发给监控服务器（供 Qt 客户端使用）
-    _RtpUnpacker->setNaluCallback([this](const uint8_t *data, size_t len, uint32_t ts) {
-        MonitorServer::instance().onNalu(_session.getStreamName(), data, len, ts);
-    });
+    // _RtpUnpacker->setNaluCallback([this](const uint8_t *data, size_t len, uint32_t ts) {
+    //     MonitorServer::instance().onNalu(_session.getStreamName(), data, len, ts);
+    // });
     LOG_INFO("RtspConnect created - Session: %s, Client: %s", 
              _session.sessionId.c_str(), _clientIp.c_str());
 }
@@ -218,7 +217,7 @@ void RtspConnect::handleSetup(const std::string& url,
                 while (true) {
                     int n = conn->recv(buffer, sizeof(buffer));
                     if (n <= 0) break;
-                    _RtpUnpacker->handleRtpPacket(buffer,n);
+                    MonitorServer::instance().onNalu(_session.getStreamName(), buffer, n);
                 }
             });
         }else if(url.find("trackID=1") != std::string::npos){   
@@ -315,7 +314,6 @@ void RtspConnect::handleTeardown(const std::string& url,
     }
     releaseSession();
     
-    _RtpUnpacker->flush();
     std::map<std::string, std::string> extraHeaders;
     sendResponse(200, "OK", extraHeaders, cseq);
 }
@@ -396,7 +394,7 @@ void RtspConnect::sendResponse(int statusCode, const std::string& statusText,
 void RtspConnect::onInterleavedFrame(uint8_t ch, const uint8_t* data, size_t len) {
     if ((ch % 2) == 0) {
         //RTP
-        _RtpUnpacker->handleRtpPacket(data,len);
+        MonitorServer::instance().onNalu(_session.getStreamName(), data, len);
     } else {
         // RTCP
         

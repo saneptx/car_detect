@@ -8,10 +8,11 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <time.h>
+#include <stdlib.h>
 #include "log.h"
 
-#define DEFAULT_WIDTH 640
-#define DEFAULT_HEIGHT 480
+#define DEFAULT_WIDTH 1920
+#define DEFAULT_HEIGHT 1080
 #define DEFAULT_FPS 30
 #define DEFAULT_RTP_PORT 5004
 #define DEFAULT_RTCP_PORT 5005
@@ -61,12 +62,19 @@ static int split_annexb_nalus(const uint8_t *buf, int len, nalu_view_t *out, int
 void *video_stream_thread(void *arg) {
     rtsp_session_t *sess = (rtsp_session_t *)arg;
     struct v4l2_buffer buf;
-    unsigned char *yuyv_data;
-    unsigned char h264_data[1024 * 1024];  /* 1MB缓冲区 */
+    unsigned char *mjpeg_data;
+    size_t h264_buf_size = (size_t)encoder.width * encoder.height * 2;
+    unsigned char *h264_data = NULL;
     int h264_len = 0;
 
     uint32_t timestamp = 0;
     const uint32_t timestamp_increment = 90000 / DEFAULT_FPS;  /* 90kHz时钟 */
+    h264_data = (unsigned char *)malloc(h264_buf_size);
+    if (!h264_data) {
+        fprintf(stderr, "无法为H264输出分配内存: %zu字节\n", h264_buf_size);
+        return NULL;
+    }
+
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
     printf("视频流线程启动\n");
@@ -76,10 +84,11 @@ void *video_stream_thread(void *arg) {
             usleep(10000);
             continue;
         }
-        yuyv_data = (unsigned char *)buf_infos[buf.index].start;
-        /* 编码为H264 */
-        if (yuyv_to_h264(&encoder, yuyv_data, h264_data, &h264_len) == 0 && h264_len > 0) {
-
+        mjpeg_data = (unsigned char *)buf_infos[buf.index].start;
+        size_t mjpeg_size = buf.bytesused;
+        /* 解码MJPEG并编码为H264 */
+        if (mjpeg_to_h264(&encoder, mjpeg_data, mjpeg_size, h264_data,
+                          h264_buf_size, &h264_len) == 0 && h264_len > 0) {
             /* 发送RTP包到服务器 */
             nalu_view_t nalus[32];
             int n = split_annexb_nalus(h264_data, h264_len, nalus, 32);
@@ -92,10 +101,12 @@ void *video_stream_thread(void *arg) {
             // 这一帧的所有 NAL 都发完了，再推进一次时间戳
             timestamp += timestamp_increment;      
         }
+        usleep(90000/DEFAULT_FPS);
         /* 将缓冲区放回队列 */
         v4l2_qbuf(&buf);
     }
     printf("视频流线程退出\n");
+    free(h264_data);
     return NULL;
 }
 
@@ -193,9 +204,9 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, signal_handler);
     
     /* 初始化RTSP会话 */
-    rtsp_session_init(&session);
+    // rtsp_session_init(&session);
     session.rtp_ssrc = ((uint32_t)rand() << 16) ^ rand();
-    pthread_mutex_init(&session.rtp_send_mtx, NULL);
+    // pthread_mutex_init(&session.rtp_send_mtx, NULL);
     session.rtp_port = rtp_port;
     session.rtcp_port = rtcp_port;
     
@@ -221,7 +232,7 @@ int main(int argc, char *argv[]) {
         tcp_close_client(&session.client);
         return -1;
     }
-    
+
     /* 初始化缓冲区 */
     if (v4l2_init_buffer() < 0) {
         fprintf(stderr, "初始化缓冲区失败\n");
