@@ -1,18 +1,10 @@
 # ARM交叉编译工具链
 X264_INSTALL_DIR = /home/ptx/x264_arm
+JPEG_INSTALL_DIR = /home/ptx/libjpeg-turbo-arm
 CROSS_COMPILE = arm-none-linux-gnueabihf-
 CC = $(CROSS_COMPILE)gcc
-CFLAGS = -Wall -O2 -I$(X264_INSTALL_DIR)/include
-LDFLAGS = -L$(X264_INSTALL_DIR)/lib -lx264 -lpthread -lm
-
-# 检查是否有x264库
-X264_LIB = $(X264_INSTALL_DIR)/lib/libx264.so
-ifeq ($(wildcard $(X264_LIB)),)
-    $(warning ⚠️ 未找到x264库，H264编码功能将不可用)
-    $(warning 💡 请设置X264_INSTALL_DIR指向交叉编译x264的安装目录)
-else
-    CFLAGS += -DHAVE_X264
-endif
+CFLAGS = -Wall -g -O2 -I$(X264_INSTALL_DIR)/include -I$(JPEG_INSTALL_DIR)/include
+LDFLAGS = -L$(X264_INSTALL_DIR)/lib -lx264 -lpthread -lm -L$(JPEG_INSTALL_DIR)/lib -lturbojpeg -ljpeg
 
 # 源文件
 TCP_SRC = tcp.c

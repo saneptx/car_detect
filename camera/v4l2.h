@@ -12,6 +12,7 @@
 #include <sys/mman.h> 
 #include <linux/videodev2.h> 
 #include <linux/fb.h> 
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -76,12 +77,14 @@ int v4l2_qbuf(struct v4l2_buffer *buf);
 /* 初始化H264编码器 */
 int h264_encoder_init(h264_encoder_t *encoder, int width, int height, int fps);
 
-/* 将YUYV数据转换为YUV420P格式（用于编码） */
-int yuyv_to_yuv420p(unsigned char *yuyv, unsigned char *yuv420p, int width, int height);
+/* 将MJPEG数据转换为YUV420P格式（用于编码） */
+int mjpeg_to_yuv420p(const unsigned char *mjpeg, size_t mjpeg_size,
+                     unsigned char *yuv420p, int width, int height);
 
-/* 编码一帧YUYV数据为H264 */
-int yuyv_to_h264(h264_encoder_t *encoder, unsigned char *yuyv, 
-                 unsigned char *h264_data, int *h264_len);
+/* 编码一帧MJPEG数据为H264 */
+int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
+                  size_t mjpeg_size, unsigned char *h264_data,
+                  size_t h264_buf_size, int *h264_len);
 
 /* 清理H264编码器 */
 void h264_encoder_cleanup(h264_encoder_t *encoder);

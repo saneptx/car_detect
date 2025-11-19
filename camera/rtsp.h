@@ -37,7 +37,7 @@ typedef struct rtsp_session {
     uint16_t rtcpChannel;
     uint32_t rtp_ssrc;
     atomic_uint_fast16_t rtp_seq;
-    pthread_mutex_t      rtp_send_mtx; // 可选：对 send 整体加锁
+    // pthread_mutex_t      rtp_send_mtx; // 可选：对 send 整体加锁
     uint32_t rtp_timestamp;
     /* 来自DESCRIBE/SDP解析的信息 */
     char content_base[RTSP_MAX_URL];
@@ -46,10 +46,10 @@ typedef struct rtsp_session {
     int payload_type;   /* 如 96 */
     int clock_rate;     /* 如 90000 */
     /* SPS/PPS缓存，避免重复发送 */
-    uint8_t *sps;
-    size_t sps_size;
-    uint8_t *pps;
-    size_t pps_size;
+    // uint8_t *sps;
+    // size_t sps_size;
+    // uint8_t *pps;
+    // size_t pps_size;
     char transType[32];
 } rtsp_session_t;
 

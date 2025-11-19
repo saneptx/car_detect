@@ -1,30 +1,33 @@
 #include "v4l2.h"
 #include <stdint.h>
-
+#include <turbojpeg.h>
 /* 注意：需要安装libx264-dev库 */
-#ifdef HAVE_X264
 #include <x264.h>
-#else
-/* 如果没有x264库，提供简化版本或编译时链接 */
-/* 这里我们提供一个接口，实际使用时需要安装x264库 */
-typedef struct {
-    int dummy;
-} x264_t;
-typedef struct {
-    int dummy;
-} x264_param_t;
-typedef struct {
-    int dummy;
-} x264_picture_t;
-typedef struct {
-    int dummy;
-} x264_nal_t;
-#endif
+
 
 int v4l2_fd = -1;
 cam_buf_info buf_infos[FRAMEBUFFER_COUNT]; 
 cam_fmt cam_fmts[10]; 
 int frm_width, frm_height;
+tjhandle tj_decoder = NULL;
+
+static int ensure_tj_decoder(void) {
+    if (tj_decoder)
+        return 0;
+    tj_decoder = tjInitDecompress();
+    if (!tj_decoder) {
+        fprintf(stderr, "tjInitDecompress failed: %s\n", tjGetErrorStr());
+        return -1;
+    }
+    return 0;
+}
+
+static void destroy_tj_decoder(void) {
+    if (tj_decoder) {
+        tjDestroy(tj_decoder);
+        tj_decoder = NULL;
+    }
+}
 
 /* 摄像头初始化 */
 int v4l2_dev_init(const char *device) {
@@ -107,20 +110,27 @@ int v4l2_set_format(int width, int height) {
     struct v4l2_format fmt = {0}; 
     struct v4l2_streamparm streamparm = {0}; 
 
-    /* 设置帧格式 */ 
+    /* 设置帧格式为MJPEG */ 
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width = width;
     fmt.fmt.pix.height = height;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+    fmt.fmt.pix.field = V4L2_FIELD_ANY;
     
     if (0 > ioctl(v4l2_fd, VIDIOC_S_FMT, &fmt)) { 
-        fprintf(stderr, "ioctl error: VIDIOC_S_FMT: %s\n", strerror(errno)); 
+        fprintf(stderr, "ioctl error: VIDIOC_S_FMT (MJPEG): %s\n", strerror(errno)); 
         return -1; 
     } 
 
+    if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_MJPEG) {
+        fprintf(stderr, "Error: camera does not support MJPEG format (got 0x%x)\n",
+                fmt.fmt.pix.pixelformat);
+        return -1;
+    }
+
     frm_width = fmt.fmt.pix.width;
     frm_height = fmt.fmt.pix.height;
-    printf("视频帧大小<%d * %d>\n", frm_width, frm_height); 
+    printf("视频帧大小<%d * %d>，像素格式<MJPEG>\n", frm_width, frm_height); 
 
     /* 获取streamparm */ 
     streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE; 
@@ -221,41 +231,6 @@ int v4l2_qbuf(struct v4l2_buffer *buf) {
     return 0;
 }
 
-/* 将YUYV数据转换为YUV420P格式 */
-int yuyv_to_yuv420p(unsigned char *yuyv, unsigned char *yuv420p, int width, int height) {
-    int i, j;
-    unsigned char *y_plane = yuv420p;
-    unsigned char *u_plane = yuv420p + width * height;
-    unsigned char *v_plane = yuv420p + width * height + (width * height / 4);
-
-    // Y 分量
-    for (i = 0; i < height; i++) {
-        for (j = 0; j < width; j++) {
-            y_plane[i * width + j] = yuyv[i * width * 2 + j * 2];
-        }
-    }
-
-    // U/V 分量（2x2 下采样平均）
-    for (i = 0; i < height; i += 2) {
-        for (j = 0; j < width; j += 2) {
-            int idx00 = i * width * 2 + j * 2;       // 当前行左像素对
-            int idx01 = idx00 + 4;                   // 当前行右像素对
-            int idx10 = (i + 1) * width * 2 + j * 2; // 下一行左像素对
-            int idx11 = idx10 + 4;                   // 下一行右像素对
-
-            int U = (yuyv[idx00 + 1] + yuyv[idx01 + 1] + yuyv[idx10 + 1] + yuyv[idx11 + 1]) / 4;
-            int V = (yuyv[idx00 + 3] + yuyv[idx01 + 3] + yuyv[idx10 + 3] + yuyv[idx11 + 3]) / 4;
-
-            u_plane[(i / 2) * (width / 2) + (j / 2)] = (unsigned char)U;
-            v_plane[(i / 2) * (width / 2) + (j / 2)] = (unsigned char)V;
-        }
-    }
-
-    return 0;
-}
-
-
-#ifdef HAVE_X264
 /* 初始化H264编码器 */
 int h264_encoder_init(h264_encoder_t *encoder, int width, int height, int fps) {
     x264_param_t param;
@@ -290,44 +265,116 @@ int h264_encoder_init(h264_encoder_t *encoder, int width, int height, int fps) {
     return 0;
 }
 
-/* 编码一帧YUYV数据为H264 */
-int yuyv_to_h264(h264_encoder_t *encoder, unsigned char *yuyv, unsigned char *h264_data, int *h264_len) {
+int mjpeg_to_yuv420p(const unsigned char *mjpeg, size_t mjpeg_size,
+                     unsigned char *yuv420p, int width, int height) {
+    if (!mjpeg || !yuv420p || width <= 0 || height <= 0)
+        return -1;
+    if (ensure_tj_decoder() != 0)
+        return -1;
+
+    int img_w = 0, img_h = 0, subsamp = 0, colorspace = 0;
+    if (tjDecompressHeader3(tj_decoder, mjpeg, (unsigned long)mjpeg_size,
+                            &img_w, &img_h, &subsamp, &colorspace) != 0) {
+        fprintf(stderr, "tjDecompressHeader3 failed: %s\n", tjGetErrorStr());
+        return -1;
+    }
+    if (img_w != width || img_h != height) {
+        fprintf(stderr, "MJPEG帧尺寸与设置不一致: 期望%dx%d 实际%dx%d\n",
+                width, height, img_w, img_h);
+        return -1;
+    }
+    int flags = TJFLAG_FASTDCT | TJFLAG_FASTUPSAMPLE;
+    if (tjDecompressToYUV2(tj_decoder, mjpeg, (unsigned long)mjpeg_size,
+                           yuv420p, width, 1, height, flags) != 0) {
+        fprintf(stderr, "tjDecompressToYUV2 failed: %s\n", tjGetErrorStr());
+        return -1;
+    }
+    return 0;
+}
+
+/* 编码一帧MJPEG数据为H264 */
+int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
+                  size_t mjpeg_size, unsigned char *h264_data,
+                  size_t h264_buf_size, int *h264_len)
+{
+    if (!encoder || !encoder->initialized || !h264_data || !h264_len)
+        return -1;
+
     x264_t *x264_enc = (x264_t *)encoder->x264_encoder;
     x264_picture_t pic_in, pic_out;
-    x264_nal_t *nals;
-    int i_nal, i_frame_size;
+    x264_nal_t *nals = NULL;
+    int i_nal = 0, i_frame_size = 0;
+    int ret = -1;   // 默认失败
 
-    if (!encoder->initialized)
-    return -1;
+    // 1. MJPEG -> YUV420P 到 encoder->yuv_buffer
+    if (mjpeg_to_yuv420p(mjpeg, mjpeg_size,
+                         (unsigned char *)encoder->yuv_buffer,
+                         encoder->width, encoder->height) < 0) {
+        return -1;
+    }
 
-    // 转换 YUYV -> YUV420P
-    yuyv_to_yuv420p(yuyv, encoder->yuv_buffer, encoder->width, encoder->height);
+    // 2. 分配 x264_picture_t 的 plane（让 x264 决定 stride 和对齐）
+    if (x264_picture_alloc(&pic_in, X264_CSP_I420,
+                           encoder->width, encoder->height) < 0) {
+        fprintf(stderr, "x264_picture_alloc failed\n");
+        return -1;
+    }
 
-    // 初始化图片
-    memset(&pic_in, 0, sizeof(pic_in));
-    pic_in.img.i_csp = X264_CSP_I420;
-    pic_in.img.i_plane = 3;
-    pic_in.img.i_stride[0] = encoder->width;
-    pic_in.img.i_stride[1] = encoder->width / 2;
-    pic_in.img.i_stride[2] = encoder->width / 2;
-    pic_in.img.plane[0] = encoder->yuv_buffer;
-    pic_in.img.plane[1] = encoder->yuv_buffer + encoder->width * encoder->height;
-    pic_in.img.plane[2] = encoder->yuv_buffer + encoder->width * encoder->height * 5 / 4;
+    // 3. 把 yuv_buffer 逐行拷贝到 pic_in
+    unsigned char *src_y = (unsigned char *)encoder->yuv_buffer;
+    unsigned char *src_u = src_y + encoder->width * encoder->height;
+    unsigned char *src_v = src_u + (encoder->width * encoder->height) / 4;
+
+    // Y 平面
+    for (int row = 0; row < encoder->height; ++row) {
+        memcpy(pic_in.img.plane[0] + row * pic_in.img.i_stride[0],
+               src_y + row * encoder->width,
+               encoder->width);
+    }
+
+    int chroma_h = encoder->height / 2;
+    int chroma_w = encoder->width / 2;
+
+    // U/V 平面
+    for (int row = 0; row < chroma_h; ++row) {
+        memcpy(pic_in.img.plane[1] + row * pic_in.img.i_stride[1],
+               src_u + row * chroma_w,
+               chroma_w);
+        memcpy(pic_in.img.plane[2] + row * pic_in.img.i_stride[2],
+               src_v + row * chroma_w,
+               chroma_w);
+    }
+
+    // 4. 设置 PTS（可以保留你的 static pts）
     static int64_t pts = 0;
     pic_in.i_pts = pts++;
 
-    // 编码
+    // 5. 编码
+    memset(&pic_out, 0, sizeof(pic_out));
     i_frame_size = x264_encoder_encode(x264_enc, &nals, &i_nal, &pic_in, &pic_out);
-    if (i_frame_size < 0)
-    return -1;
+    if (i_frame_size < 0) {
+        fprintf(stderr, "x264_encoder_encode failed\n");
+        goto cleanup;
+    }
 
-    // 拷贝 NAL 数据
+    // 6. 拷贝 NAL 到输出缓冲
     *h264_len = 0;
-    for (int i = 0; i < i_nal; i++) {
+    for (int i = 0; i < i_nal; ++i) {
+        if ((size_t)(*h264_len) + (size_t)nals[i].i_payload > h264_buf_size) {
+            fprintf(stderr, "H264缓冲区不足: 需要%zu字节, 仅有%zu字节\n",
+                    (size_t)(*h264_len) + (size_t)nals[i].i_payload, h264_buf_size);
+            *h264_len = 0;
+            goto cleanup;
+        }
         memcpy(h264_data + *h264_len, nals[i].p_payload, nals[i].i_payload);
         *h264_len += nals[i].i_payload;
     }
-    return 0;
+
+    ret = 0;   // 成功
+
+cleanup:
+    x264_picture_clean(&pic_in);   // 释放 picture_alloc 申请的 plane 内存
+    return ret;
 }
 
 
@@ -339,34 +386,8 @@ void h264_encoder_cleanup(h264_encoder_t *encoder) {
         free(encoder->yuv_buffer);
         encoder->initialized = 0;
     }
+    destroy_tj_decoder();
 }
-#else
-/* 如果没有x264库，提供占位实现 */
-int h264_encoder_init(h264_encoder_t *encoder, int width, int height, int fps) {
-    fprintf(stderr, "警告: 未编译x264支持，请安装libx264-dev并定义HAVE_X264\n");
-    encoder->width = width;
-    encoder->height = height;
-    encoder->fps = fps;
-    encoder->yuv_buffer = malloc(width * height * 3 / 2);
-    encoder->initialized = 0;  /* 标记为未初始化 */
-    return -1;
-}
-
-int yuyv_to_h264(h264_encoder_t *encoder, unsigned char *yuyv, 
-                 unsigned char *h264_data, int *h264_len) {
-    (void)encoder; (void)yuyv; (void)h264_data; (void)h264_len;
-    fprintf(stderr, "错误: x264未启用\n");
-    return -1;
-}
-
-void h264_encoder_cleanup(h264_encoder_t *encoder) {
-    if (encoder->yuv_buffer) {
-        free(encoder->yuv_buffer);
-        encoder->yuv_buffer = NULL;
-    }
-    encoder->initialized = 0;
-}
-#endif
 
 /* 清理v4l2资源 */
 void v4l2_cleanup(void) {
