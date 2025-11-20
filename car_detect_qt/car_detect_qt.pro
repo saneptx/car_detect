@@ -16,15 +16,19 @@ DEFINES += QT_DEPRECATED_WARNINGS
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+    decoderworker.cpp \
     h264rtpreassembler.cpp \
     h264decoder.cpp \
     main.cpp \
-    monitorclientwidget.cpp
+    monitorclientwidget.cpp \
+    multistreamdecoder.cpp
 
 HEADERS += \
+    decoderworker.h \
     h264rtpreassembler.h \
     h264decoder.h \
-    monitorclientwidget.h
+    monitorclientwidget.h \
+    multistreamdecoder.h
 
 FORMS += \
     mainwindow.ui

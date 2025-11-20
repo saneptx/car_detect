@@ -93,7 +93,7 @@ void MonitorServer::onNalu(const std::string &streamName,
     std::set<int> badFds;
     for (int fd : _clients) {
         ssize_t n = ::send(fd, buf.data(), buf.size(), MSG_NOSIGNAL|MSG_DONTWAIT);
-        LOG_DEBUG("send %d seq, %d data",(data[6]<<8|data[7]),n);
+        // LOG_DEBUG("send %d seq, %d data",(data[6]<<8|data[7]),n);
         if (n < 0) {
             LOG_WARN("MonitorServer send failed on fd %d: %s", fd, strerror(errno));
             badFds.insert(fd);
