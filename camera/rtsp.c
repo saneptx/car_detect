@@ -80,7 +80,7 @@ int send_rtp_over_tcp(rtsp_session_t *sess, const uint8_t *rtp_data, size_t rtp_
     // 一次性发送合并后的数据
     // pthread_mutex_lock(&sess->rtp_send_mtx);
     ret = tcp_write(&sess->client, buffer, total_len);
-    LOG_DEBUG("send %d seq, %d data",(buffer[6]<<8|buffer[7]),ret);
+    // LOG_DEBUG("send %d seq, %d data",(buffer[6]<<8|buffer[7]),ret);
     // pthread_mutex_unlock(&sess->rtp_send_mtx);
     // 发送完成后释放内存
     free(buffer);
@@ -94,11 +94,19 @@ void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
         return;
     }
     uint8_t rtp_header[RTP_HEADER_SIZE];
-    uint8_t packet[MTU-4];//rtsp区分留四个字节空位
-
     if(4 + nalu_size + RTP_HEADER_SIZE <= MTU){
+        uint8_t packet[MTU-4];//rtsp区分留四个字节空位
+        uint8_t nal_type = nalu[0] & 0x1F;
+        bool marker = true;
+        // if(nal_type == 6){
+        //     return;
+        // }
+        if(nal_type==7||nal_type==8||nal_type == 6){
+            marker = false;
+        }
+        // LOG_DEBUG("nal type:%d,size:%d",nal_header & 0x1F,nalu_size+4+RTP_HEADER_SIZE);
         uint16_t seq = next_seq(session);
-        build_rtp_header(rtp_header, seq, *timestamp, session->rtp_ssrc, 96, true);
+        build_rtp_header(rtp_header, seq, *timestamp, session->rtp_ssrc, 96, marker);
         memcpy(packet, rtp_header, RTP_HEADER_SIZE);
         memcpy(packet + RTP_HEADER_SIZE, nalu, nalu_size);
         size_t pkt_len = RTP_HEADER_SIZE + nalu_size;
@@ -109,39 +117,52 @@ void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
             udp_send(&session->rtp_socket, packet, pkt_len);
     }else{
         // FU-A 分片发送
-        uint8_t nal_header = nalu[0];//获取nalu头部
+        uint8_t packet[MTU-4];//rtsp区分留四个字节空位
+        uint8_t nal_header = nalu[0];
+        const uint8_t *payload = nalu + 1;           // skip original header
+        size_t payload_size = nalu_size - 1;         // real payload
+
         size_t pos = 0;
         bool isStart = true;
 
-        while (pos < nalu_size) {
+        while (pos < payload_size) {
             //18 = 12(RTP头部) + 4(用于RTSP区分) +2(分片额外负载)
-            size_t len = (nalu_size - pos > (MTU - 18)) ? (MTU - 18) : (nalu_size - pos);
-            bool isLast = (pos + len >= nalu_size);
+            size_t len = (payload_size - pos > (MTU - 18))
+                        ? (MTU - 18)
+                        : (payload_size - pos);
 
-            uint8_t fu_ind = (nal_header & 0xE0) | 28;//把原始 NALU 的 F、NRI 保留下来，并将 Type 改为 28（FU-A）
+            bool isLast = (pos + len >= payload_size);
+            /*
+            +---+---+---+---------------------+
+            | F |   NRI |      Type   (5bit)  |
+            +---+---+---+---------------------+
+            */
+            uint8_t fu_ind = (nal_header & 0xE0) | 28;
             /*
             +---+---+---+---------------------+
             | S | E | R |    NAL Type (5bit)  |
             +---+---+---+---------------------+
             */
-            uint8_t fu_hdr = (isStart ? 0x80 : 0x00) | (isLast ? 0x40 : 0x00) | (nal_header & 0x1F);
-
-            uint16_t seq = next_seq(session);
-            build_rtp_header(rtp_header, seq, *timestamp, session->rtp_ssrc, 96, isLast);
+            uint8_t fu_hdr = (isStart ? 0x80 : 0x00)
+                        | (isLast ? 0x40 : 0x00)
+                        | (nal_header & 0x1F);
 
             size_t offset = 0;
+            uint16_t seq = next_seq(session);
+            build_rtp_header(rtp_header, seq, *timestamp, session->rtp_ssrc, 96, isLast);
             memcpy(packet + offset, rtp_header, RTP_HEADER_SIZE);
-            offset += RTP_HEADER_SIZE;//12
-            packet[offset] = fu_ind;
-            packet[offset++] = fu_hdr;//13
-            memcpy(packet + offset++, nalu + pos, len);//14
-            offset += len;//14+1382=1396
+            offset += RTP_HEADER_SIZE;
+            packet[offset++] = fu_ind;
+            packet[offset++] = fu_hdr;
 
+            memcpy(packet + offset, payload + pos, len);
+            offset += len;
+
+            // send rtp...
             if (strcmp(session->transType, "tcp") == 0)
                 send_rtp_over_tcp(session, packet, offset, session->rtpChannel);
             else
                 udp_send(&session->rtp_socket, packet, offset);
-
             pos += len;
             isStart = false;
         }

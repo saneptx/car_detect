@@ -24,7 +24,12 @@ public:
     void handleRtp(const QString &streamName,const RtpPacket &pkt);
 
 private:
-    static void appendStartCode(QByteArray &ba) {
+    static void appendStartCode3(QByteArray &ba) {
+        ba.append('\0');
+        ba.append('\0');
+        ba.append('\1');
+    }
+    static void appendStartCode4(QByteArray &ba) {
         ba.append('\0');
         ba.append('\0');
         ba.append('\0');

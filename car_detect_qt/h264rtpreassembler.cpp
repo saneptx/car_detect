@@ -15,10 +15,10 @@ void H264RtpReassembler::handleRtp(const QString &streamName,const RtpPacket &pk
 
     // ------------------- 单 NALU 包 -----------------------
     if (nalType > 0 && nalType < 24) {
-        appendStartCode(_frame);
+//        qDebug()<<"not FU-A "<<nalType<<" "<<len;
+        appendStartCode4(_frame);
         _frame.append((const char*)p, len);
     }
-
     // ------------------- FU-A 分片 ------------------------
     else if (nalType == 28 && len >= 2) {
         uint8_t fuIndicator = p[0];
@@ -26,21 +26,21 @@ void H264RtpReassembler::handleRtp(const QString &streamName,const RtpPacket &pk
         uint8_t start = fuHeader & 0x80;
         uint8_t end   = fuHeader & 0x40;
         uint8_t realType = fuHeader & 0x1F;
-
+//        qDebug()<<"FU-A "<<nalType<<" "<<realType<<" "<<len;
         if (start) {
             _fuData.clear();
             uint8_t nalHeader = (fuIndicator & 0xE0) | realType;
             _fuData.push_back(nalHeader);
             _fuData.insert(_fuData.end(), p+2, p+len);
-        } else {
+        }else if (end) {
+            appendStartCode4(_frame);
+            _frame.append((const char*)_fuData.data(), _fuData.size());
+            _fuData.clear();
+        }else {
             _fuData.insert(_fuData.end(), p+2, p+len);
         }
 
-        if (end) {
-            appendStartCode(_frame);
-            _frame.append((const char*)_fuData.data(), _fuData.size());
-            _fuData.clear();
-        }
+
     }
 
     // ------------------- M 位标记一帧结束 -------------------

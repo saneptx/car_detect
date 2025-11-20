@@ -10,6 +10,7 @@
 #include <QSharedPointer>
 #include "h264decoder.h"
 #include "h264rtpreassembler.h"
+#include "multistreamdecoder.h"
 
 
 static RtpPacket parseRtp(const QByteArray &ba)
@@ -48,14 +49,14 @@ private:
     QTcpSocket *_socket;
     QByteArray _buffer;
     QGridLayout *_grid;
-    QMap<QString, H264Decoder*> _decoders;
-    QMap<QString, QLabel*> _videoWidgets;
-    QMap<QString, int> _pendingDecodes;
-    QMap<QString, QSharedPointer<QMutex>> _decoderLocks;
-    H264RtpReassembler _h264;
+    // 每路一个 QLabel，用于显示画面
+   QMap<QString, QLabel*> _videoWidgets;
 
-    static constexpr int kMaxPendingPerStream = 3;
-    static constexpr int kLogIntervalFrames = 60;
+   // RTP → H264 一帧
+   H264RtpReassembler _h264;
+
+   // 多路解码管理器（内部有 DecoderWorker + QThread）
+   MultiStreamDecoder _decoderMgr;
 };
 
 #endif // MONITORCLIENTWIDGET_H

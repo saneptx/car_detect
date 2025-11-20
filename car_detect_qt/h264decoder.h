@@ -16,21 +16,17 @@ public:
     H264Decoder();
     ~H264Decoder();
 
-    // 返回 false 表示严重错误（比如打开解码器失败）
-    bool isOk() const { return _ok; }
-
     // data: 一帧 H264（含 0x00000001 起始码）
     // onFrame: 每解出一帧就回调一个 QImage（RGB）
     bool decode(const uint8_t *data, int len,
                 const std::function<void(const QImage &)> &onFrame);
-
-private:
     bool initCodec();
+private:
 
-    const AVCodec        *_codec       = nullptr;
-    AVCodecContext *_codecCtx    = nullptr;
-    AVPacket       *_packet      = nullptr;
-    AVFrame        *_frame       = nullptr;
+    const AVCodec  *_codec       = nullptr;//解码器
+    AVCodecContext *_codecCtx    = nullptr;//解码器上下文
+    AVPacket       *_packet      = nullptr;//存放原始数据H.264
+    AVFrame        *_frame       = nullptr;//存放解码后的数据YUV
     SwsContext     *_swsCtx      = nullptr;
     int             _dstW        = 0;
     int             _dstH        = 0;
