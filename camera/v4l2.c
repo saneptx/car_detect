@@ -246,8 +246,10 @@ int h264_encoder_init(h264_encoder_t *encoder, int width, int height, int fps) {
     param.i_threads = 1;
     param.b_annexb = 1;  /* 使用Annex-B格式（包含0x00000001起始码） */
     param.b_repeat_headers = 1; /* 每个IDR重复 SPS/PPS，便于新客户端加入 */
+    param.i_csp = X264_CSP_I422;
     
     x264_param_apply_profile(&param, "baseline");
+    x264_param_apply_profile(&param, "high422");
     
     x264_enc = x264_encoder_open(&param);
     if (!x264_enc) {
@@ -265,33 +267,6 @@ int h264_encoder_init(h264_encoder_t *encoder, int width, int height, int fps) {
     return 0;
 }
 
-int mjpeg_to_yuv420p(const unsigned char *mjpeg, size_t mjpeg_size,
-                     unsigned char *yuv420p, int width, int height) {
-    if (!mjpeg || !yuv420p || width <= 0 || height <= 0)
-        return -1;
-    if (ensure_tj_decoder() != 0)
-        return -1;
-
-    int img_w = 0, img_h = 0, subsamp = 0, colorspace = 0;
-    if (tjDecompressHeader3(tj_decoder, mjpeg, (unsigned long)mjpeg_size,
-                            &img_w, &img_h, &subsamp, &colorspace) != 0) {
-        fprintf(stderr, "tjDecompressHeader3 failed: %s\n", tjGetErrorStr());
-        return -1;
-    }
-    if (img_w != width || img_h != height) {
-        fprintf(stderr, "MJPEG帧尺寸与设置不一致: 期望%dx%d 实际%dx%d\n",
-                width, height, img_w, img_h);
-        return -1;
-    }
-    int flags = TJFLAG_FASTDCT | TJFLAG_FASTUPSAMPLE;
-    if (tjDecompressToYUV2(tj_decoder, mjpeg, (unsigned long)mjpeg_size,
-                           yuv420p, width, 1, height, flags) != 0) {
-        fprintf(stderr, "tjDecompressToYUV2 failed: %s\n", tjGetErrorStr());
-        return -1;
-    }
-    return 0;
-}
-
 /* 编码一帧MJPEG数据为H264 */
 int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
                   size_t mjpeg_size, unsigned char *h264_data,
@@ -299,70 +274,81 @@ int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
 {
     if (!encoder || !encoder->initialized || !h264_data || !h264_len)
         return -1;
-
+    if (ensure_tj_decoder() != 0)
+        return -1;
     x264_t *x264_enc = (x264_t *)encoder->x264_encoder;
     x264_picture_t pic_in, pic_out;
     x264_nal_t *nals = NULL;
-    int i_nal = 0, i_frame_size = 0;
-    int ret = -1;   // 默认失败
+    int i_nal = 0;
+    int i_frame_size = 0;
+    int ret = -1;
 
-    // 1. MJPEG -> YUV420P 到 encoder->yuv_buffer
-    if (mjpeg_to_yuv420p(mjpeg, mjpeg_size,
-                         (unsigned char *)encoder->yuv_buffer,
-                         encoder->width, encoder->height) < 0) {
-        return -1;
-    }
-
-    // 2. 分配 x264_picture_t 的 plane（让 x264 决定 stride 和对齐）
-    if (x264_picture_alloc(&pic_in, X264_CSP_I420,
+    // ---------------------------
+    // 1. 分配 x264 picture（必须先做）
+    // ---------------------------
+    if (x264_picture_alloc(&pic_in, X264_CSP_I422,
                            encoder->width, encoder->height) < 0) {
         fprintf(stderr, "x264_picture_alloc failed\n");
         return -1;
     }
 
-    // 3. 把 yuv_buffer 逐行拷贝到 pic_in
-    unsigned char *src_y = (unsigned char *)encoder->yuv_buffer;
-    unsigned char *src_u = src_y + encoder->width * encoder->height;
-    unsigned char *src_v = src_u + (encoder->width * encoder->height) / 4;
+    // ---------------------------
+    // 2. TurboJPEG 解码到 I420（正确方式）
+    // ---------------------------
+    unsigned char *planes[3];
+    int strides[3];
 
-    // Y 平面
-    for (int row = 0; row < encoder->height; ++row) {
-        memcpy(pic_in.img.plane[0] + row * pic_in.img.i_stride[0],
-               src_y + row * encoder->width,
-               encoder->width);
+    planes[0] = pic_in.img.plane[0];
+    planes[1] = pic_in.img.plane[1];
+    planes[2] = pic_in.img.plane[2];
+
+    strides[0] = pic_in.img.i_stride[0];
+    strides[1] = pic_in.img.i_stride[1];
+    strides[2] = pic_in.img.i_stride[2];
+
+    int flags = TJFLAG_FASTUPSAMPLE | TJFLAG_FASTDCT;
+
+    if (tjDecompressToYUVPlanes(
+                        tj_decoder,
+                        mjpeg,
+                        (unsigned long)mjpeg_size,
+                        planes,             // ← 第4个参数
+                        encoder->width,     // ← 第5个参数 width
+                        strides,            // ← 第6个参数 strides
+                        encoder->height,    // ← 第7个参数 height
+                        flags               // ← 第8个参数 flags
+    ) != 0){
+        fprintf(stderr, "tjDecompressToYUVPlanes failed: %s\n", tjGetErrorStr());
+        x264_picture_clean(&pic_in);
+        return -1;
     }
-
-    int chroma_h = encoder->height / 2;
-    int chroma_w = encoder->width / 2;
-
-    // U/V 平面
-    for (int row = 0; row < chroma_h; ++row) {
-        memcpy(pic_in.img.plane[1] + row * pic_in.img.i_stride[1],
-               src_u + row * chroma_w,
-               chroma_w);
-        memcpy(pic_in.img.plane[2] + row * pic_in.img.i_stride[2],
-               src_v + row * chroma_w,
-               chroma_w);
-    }
-
-    // 4. 设置 PTS（可以保留你的 static pts）
+    // ---------------------------
+    // 3. 设置 PTS
+    // ---------------------------
     static int64_t pts = 0;
     pic_in.i_pts = pts++;
 
-    // 5. 编码
+    // ---------------------------
+    // 4. 编码 H.264
+    // ---------------------------
     memset(&pic_out, 0, sizeof(pic_out));
+
     i_frame_size = x264_encoder_encode(x264_enc, &nals, &i_nal, &pic_in, &pic_out);
     if (i_frame_size < 0) {
         fprintf(stderr, "x264_encoder_encode failed\n");
         goto cleanup;
     }
 
-    // 6. 拷贝 NAL 到输出缓冲
+    // ---------------------------
+    // 5. 拼 NAL
+    // ---------------------------
     *h264_len = 0;
+
     for (int i = 0; i < i_nal; ++i) {
-        if ((size_t)(*h264_len) + (size_t)nals[i].i_payload > h264_buf_size) {
-            fprintf(stderr, "H264缓冲区不足: 需要%zu字节, 仅有%zu字节\n",
-                    (size_t)(*h264_len) + (size_t)nals[i].i_payload, h264_buf_size);
+        if (*h264_len + nals[i].i_payload > h264_buf_size) {
+            fprintf(stderr,
+                "H264 buffer too small: need %d but have %zu\n",
+                *h264_len + nals[i].i_payload, h264_buf_size);
             *h264_len = 0;
             goto cleanup;
         }
@@ -370,10 +356,10 @@ int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
         *h264_len += nals[i].i_payload;
     }
 
-    ret = 0;   // 成功
+    ret = 0; // success
 
 cleanup:
-    x264_picture_clean(&pic_in);   // 释放 picture_alloc 申请的 plane 内存
+    x264_picture_clean(&pic_in); // free x264 allocated memory
     return ret;
 }
 
