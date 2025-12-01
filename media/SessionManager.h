@@ -36,6 +36,9 @@ public:
     uint32_t getSessionCount(){
         return _sessionCounter;
     }
+    int getSessionNumber(){
+        return _sessions.size();
+    }
 private:  
     std::map<std::string, RtspSession> _sessions;
     std::mutex _sessionMutex;

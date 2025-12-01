@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <vector>
 #include <functional>
+#include <QMap>
 
 struct RtpPacket {
     uint8_t  vpxcc;
@@ -15,6 +16,10 @@ struct RtpPacket {
     int payloadLen;
 };
 
+struct RtpUnit {
+    uint16_t seq;
+    QByteArray data;
+};
 class H264RtpReassembler
 {
 public:
@@ -38,6 +43,8 @@ private:
 
     QByteArray _frame;               // 当前正在组装的一帧
     std::vector<uint8_t> _fuData;    // 当前 FU-A 分片
+//    QMap<uint16_t, RtpUnit> fuBuffer;  // 保存该 FU-A 所有片段
+    bool fuStarted = false;
 };
 
 #endif // H264RTPREASSEMBLER_H

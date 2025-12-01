@@ -32,6 +32,11 @@ static RtpPacket parseRtp(const QByteArray &ba)
     return pkt;
 }
 
+struct transUdpPort{
+    QUdpSocket * _udpRtpSocket;
+    QUdpSocket * _udpRtcpSocket;
+};
+
 class MonitorClientWidget: public QWidget{
     Q_OBJECT
 public:
@@ -40,6 +45,13 @@ private slots:
     void onConnected();
     void onError(QAbstractSocket::SocketError);
     void onReadyRead();
+    void parseRespond(const QString& request,
+                      QString& statusCode,
+                      QString& status,
+                      QMap<QString, QString>& headers);
+    void sendSetup();
+    void sendMessage();
+    void sendAddCamRespond(QString sessionId);
 
 private:
     void processBuffer();
@@ -47,16 +59,20 @@ private:
     void handleFrame(const QString &streamName,const QByteArray &frame);
 
     QTcpSocket *_socket;
+    QMap<QString,transUdpPort> _camMap;
     QByteArray _buffer;
     QGridLayout *_grid;
+    int _cseq = 0;
     // 每路一个 QLabel，用于显示画面
-   QMap<QString, QLabel*> _videoWidgets;
+   QMap<QString, VideoOpenGLWidget *> _videoWidgets;
 
    // RTP → H264 一帧
    H264RtpReassembler _h264;
 
    // 多路解码管理器（内部有 DecoderWorker + QThread）
    MultiStreamDecoder _decoderMgr;
+
+   quint16 _lastSeq;
 };
 
 #endif // MONITORCLIENTWIDGET_H

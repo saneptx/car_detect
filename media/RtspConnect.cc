@@ -28,6 +28,7 @@ RtspConnect::RtspConnect(std::shared_ptr<TcpConnection> tcpConn, EventLoop* loop
     // _RtpUnpacker->setNaluCallback([this](const uint8_t *data, size_t len, uint32_t ts) {
     //     MonitorServer::instance().onNalu(_session.getStreamName(), data, len, ts);
     // });
+    MonitorServer::instance().addCam(_session.sessionId,_session.stringName);
     LOG_INFO("RtspConnect created - Session: %s, Client: %s", 
              _session.sessionId.c_str(), _clientIp.c_str());
 }
@@ -50,7 +51,7 @@ void RtspConnect::handleRequest(const std::string& request) {
     // 根据方法分发处理
     if (method == "OPTIONS"){
         handleOpitions(request, headers, cseq);
-    }else if (method == "ANNOUNCE") {
+    } else if (method == "ANNOUNCE") {
         handleAnnounce(request, headers, cseq);
     } else if (method == "SETUP") {
         handleSetup(url, headers, cseq);
@@ -128,39 +129,6 @@ void RtspConnect::handleAnnounce(const std::string& request,
     } else {
         LOG_DEBUG("Received SDP via ANNOUNCE:\n%s", _sdp.c_str());
     }
-    // 从 ANNOUNCE 的第一行里提取 URL，设置流名称（已弃用）
-    // {
-    //     std::istringstream iss(request);
-    //     std::string line;
-    //     if (std::getline(iss, line)) {
-    //         std::istringstream rl(line);
-    //         std::string method, url, version;
-    //         rl >> method >> url >> version;
-    //         if (!url.empty()) {
-    //             // 提取路径最后一段作为 streamName
-    //             std::string path = url;
-    //             auto pos = path.find("://");
-    //             if (pos != std::string::npos) {
-    //                 pos = path.find('/', pos + 3);
-    //                 if (pos != std::string::npos) {
-    //                     path = path.substr(pos + 1);
-    //                 }
-    //             } else if (!path.empty() && path[0] == '/') {
-    //                 path = path.substr(1);
-    //             }
-    //             // 去掉 query
-    //             auto qpos = path.find('?');
-    //             if (qpos != std::string::npos) {
-    //                 path = path.substr(0, qpos);
-    //             }
-    //             if (!path.empty()) {
-    //                 _session.setStreamName(path);
-    //                 LOG_INFO("Set stream name to '%s' for session %s",
-    //                          path.c_str(), _session.sessionId.c_str());
-    //             }
-    //         }
-    //     }
-    // }
 
     std::map<std::string, std::string> extraHeaders;
     sendResponse(200, "OK", extraHeaders, cseq);
@@ -178,7 +146,6 @@ void RtspConnect::handleSetup(const std::string& url,
         sendResponse(400, "Bad Request", extraHeaders, cseq);
         return;
     }
-    
     std::string transportType;
     uint16_t clientRtpPort = 0, clientRtcpPort = 0;
     uint16_t serverRtpPort = 0, serverRtcpPort = 0;
@@ -217,7 +184,8 @@ void RtspConnect::handleSetup(const std::string& url,
                 while (true) {
                     int n = conn->recv(buffer, sizeof(buffer));
                     if (n <= 0) break;
-                    MonitorServer::instance().onNalu(_session.getStreamName(), buffer, n);
+                    // LOG_DEBUG("Recived UDP %d data",n);
+                    MonitorServer::instance().onNaluUdp(_session.sessionId,buffer, n);
                 }
             });
         }else if(url.find("trackID=1") != std::string::npos){   
@@ -239,7 +207,6 @@ void RtspConnect::handleSetup(const std::string& url,
                      << "-" << clientRtcpPort 
                      << ";server_port=" << serverRtpPort 
                      << "-" << serverRtcpPort;
-                     
     } else if (transportType == "TCP") {
         // TCP模式处理（interleaved）
         // TCP模式下，RTP/RTCP数据通过RTSP TCP连接传输
@@ -394,7 +361,7 @@ void RtspConnect::sendResponse(int statusCode, const std::string& statusText,
 void RtspConnect::onInterleavedFrame(uint8_t ch, const uint8_t* data, size_t len) {
     if ((ch % 2) == 0) {
         //RTP
-        MonitorServer::instance().onNalu(_session.getStreamName(), data, len);
+        // MonitorServer::instance().onNaluTcp(_session.getStreamName(), data, len);
     } else {
         // RTCP
         
@@ -541,6 +508,7 @@ void RtspConnect::releaseSession(){
     if(_session.audioRtcpConn != nullptr){
         _loop->removeUdpConnection(_session.audioRtcpConn);
     }
+    MonitorServer::instance().removeCam(_session.sessionId);
     // if (_recorder) {
     //     _recorder->close();
     //     _recorder.reset();
