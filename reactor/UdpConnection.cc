@@ -1,6 +1,7 @@
 #include "UdpConnection.h"
 #include <iostream>
 #include <sstream>
+#include <future>
 
 using std::cout;
 using std::endl;
@@ -15,14 +16,15 @@ UdpConnection::UdpConnection(const string &ip,unsigned short port,InetAddress pe
 UdpConnection::~UdpConnection() {
 }
 
-void UdpConnection::send(const std::string& msg) {
-    _sock.sendto(msg.c_str(), msg.size());
+int UdpConnection::send(const std::string& msg,int len) {
+    int n = _sock.sendto(msg.c_str(), len);
+    return n;
 }
 
-void UdpConnection::sendInLoop(const std::string& msg) {
+void UdpConnection::sendInLoop(const std::string& msg,int len) {
     if (_loopPtr) {
-        _loopPtr->runInLoop([self = shared_from_this(), msg]() {
-            self->send(msg);
+        _loopPtr->runInLoop([self = shared_from_this(), msg, len]() {
+            self->send(msg,len);
         });
     }
 }

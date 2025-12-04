@@ -179,15 +179,6 @@ void RtspConnect::handleSetup(const std::string& url,
             //     ,InetAddress(_clientIp,clientRtcpPort),_loop);
             _loop->addUdpConnection(_session.videoRtpConn);
             // _loop->addUdpConnection(_session.videoRtcpConn);
-            _session.videoRtpConn->setMessageCallback([this](const UdpConnectionPtr &conn){
-                uint8_t buffer[1500];
-                while (true) {
-                    int n = conn->recv(buffer, sizeof(buffer));
-                    if (n <= 0) break;
-                    // LOG_DEBUG("Recived UDP %d data",n);
-                    MonitorServer::instance().onNaluUdp(_session.sessionId,buffer, n);
-                }
-            });
         }else if(url.find("trackID=1") != std::string::npos){   
             if (serverRtpPort == 0) {
                 serverRtpPort = _sessionManager.allocateUdpPorts() + 2;
@@ -254,7 +245,41 @@ void RtspConnect::handleRecord(const std::string& url,
         sendResponse(454, "Session Not Found", extraHeaders, cseq);
         return;
     }
-
+    
+    auto it = headers.find("kcpid");
+    if (it != headers.end()) {
+        std::string kcpIdStr = it->second;
+        unsigned long kcpIdLong = std::stoul(kcpIdStr);
+        uint32_t conv = static_cast<unsigned int>(kcpIdLong);
+        initCamKcp(conv, _session.videoRtpConn);
+    }
+    _kcpRunning = true;
+    _kcpThread = std::thread([this](){
+        while(_kcpRunning){
+            {
+                std::lock_guard<std::mutex> lock(_kcpMutex);
+                if (_camKcp) {
+                    ikcp_update(_camKcp, iclock());
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    });
+    _session.videoRtpConn->setMessageCallback([this](const UdpConnectionPtr &conn){
+        uint8_t buffer[1500];
+        while (true) {
+            int n = conn->recv(buffer, sizeof(buffer));
+            if (n <= 0) break;
+            std::lock_guard<std::mutex> lock(_kcpMutex);
+            ikcp_input(_camKcp, reinterpret_cast<const char*>(buffer), n);
+            char kcp_buffer[1500];
+            int rtp_len = ikcp_recv(_camKcp, kcp_buffer, sizeof(kcp_buffer));
+            if (rtp_len > 0) {
+                LOG_DEBUG("Recived KCP %d data",rtp_len);
+            }
+            MonitorServer::instance().onNaluUdp(_session.sessionId, (uint8_t*)kcp_buffer, rtp_len);
+        }
+    });
     if (_state != RtspState::READY) {
         LOG_WARN("RECORD request in wrong state: %d", (int)_state);
         std::map<std::string, std::string> extraHeaders;
@@ -473,7 +498,25 @@ bool RtspConnect::parseTransport(const std::string& transport,
     
     return false;  // 未识别传输类型
 }
-
+static int kcp_output(const char *buf, int len, ikcpcb *kcp, void *user) {
+    auto kcpClient = static_cast<UdpConnection*>(user);
+    std::string data(buf, len);
+    return kcpClient->send(data,data.size());
+}
+void RtspConnect::initCamKcp(uint32_t conv,UdpConnectionPtr kcpClient){
+    UdpConnection *udpConn = kcpClient.get();
+    _camKcp = ikcp_create(conv,udpConn);
+    _camKcp->output = kcp_output;
+    ikcp_nodelay(_camKcp, 1, 10, 2, 0);
+    ikcp_wndsize(_camKcp, 128, 128);
+    ikcp_setmtu(_camKcp, 1450);
+}
+void RtspConnect::kcp_update_thread(){
+    while (true) {
+        ikcp_update(_camKcp, iclock());
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
 std::string RtspConnect::extractBody(const std::string& request,
                                      const std::map<std::string, std::string>& headers) {
     size_t pos = request.find("\r\n\r\n");
@@ -496,6 +539,15 @@ std::string RtspConnect::extractBody(const std::string& request,
 }
 
 void RtspConnect::releaseSession(){
+    MonitorServer::instance().removeCam(_session.sessionId);
+    _kcpRunning = false;          // 通知线程退出
+    if (_kcpThread.joinable()) {
+        _kcpThread.join();        // 等待线程退出
+    }
+    if (_camKcp) {
+        ikcp_release(_camKcp);
+        _camKcp = nullptr;
+    }
     if(_session.videoRtpConn != nullptr){
         _loop->removeUdpConnection(_session.videoRtpConn);
     }
@@ -508,7 +560,6 @@ void RtspConnect::releaseSession(){
     if(_session.audioRtcpConn != nullptr){
         _loop->removeUdpConnection(_session.audioRtcpConn);
     }
-    MonitorServer::instance().removeCam(_session.sessionId);
     // if (_recorder) {
     //     _recorder->close();
     //     _recorder.reset();

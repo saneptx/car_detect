@@ -9,18 +9,39 @@
 #include <stdint.h>
 #include <time.h>
 #include <stdlib.h>
+#include <sys/select.h>   // 引入 select
+#include <sys/time.h>     // 引入 gettimeofday
+#include <sys/socket.h>   // 引入 socket 相关的
+#include <fcntl.h>        // 引入 fcntl
+#include <errno.h>        // 引入 errno
 #include "log.h"
+#include "kcp.h"
 
 #define DEFAULT_WIDTH 1920
 #define DEFAULT_HEIGHT 1080
 #define DEFAULT_FPS 30
 #define DEFAULT_RTP_PORT 5004
 #define DEFAULT_RTCP_PORT 5005
+#define MAX_BUFFER_SIZE 2048 // UDP/KCP 接收缓冲区大小
+
+/* 设置文件描述符为非阻塞模式 */
+static int set_socket_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        perror("fcntl(F_GETFL) failed");
+        return -1;
+    }
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        perror("fcntl(F_SETFL, O_NONBLOCK) failed");
+        return -1;
+    }
+    return 0;
+}
 
 static int running = 1;
 static h264_encoder_t encoder;
 static rtsp_session_t session;
-// FILE *h264_file;
+FILE *h264_file;
 /* 信号处理 */
 void signal_handler(int sig) {
     (void)sig;
@@ -41,7 +62,7 @@ static int split_annexb_nalus(const uint8_t *buf, int len, nalu_view_t *out, int
         if (sc) {
             if (start >= 0 && cnt < max_nalus) {
                 out[cnt].ptr = buf + start;
-                out[cnt].len = i - start;        // 不含下一起始码
+                out[cnt].len = i - start;
                 cnt++;
             }
             i += sc;
@@ -74,7 +95,7 @@ void *video_stream_thread(void *arg) {
         fprintf(stderr, "无法为H264输出分配内存: %zu字节\n", h264_buf_size);
         return NULL;
     }
-    // h264_file = fopen("original.h264", "wb");
+    h264_file = fopen("original.h264", "wb");
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
     printf("视频流线程启动\n");
@@ -89,9 +110,9 @@ void *video_stream_thread(void *arg) {
         /* 解码MJPEG并编码为H264 */
         if (mjpeg_to_h264(&encoder, mjpeg_data, mjpeg_size, h264_data,
                           h264_buf_size, &h264_len) == 0 && h264_len > 0) {
-            // if(h264_file){
-            //     fwrite(h264_data, 1, h264_len, h264_file);
-            // }
+            if(h264_file){
+                fwrite(h264_data, 1, h264_len, h264_file);
+            }
             /* 发送RTP包到服务器 */
             nalu_view_t nalus[32];
             int n = split_annexb_nalus(h264_data, h264_len, nalus, 32);
@@ -135,7 +156,7 @@ int main(int argc, char *argv[]) {
     const char *url = "/stream";
     int width = DEFAULT_WIDTH;
     int height = DEFAULT_HEIGHT;
-    uint16_t rtp_port = DEFAULT_RTP_PORT;
+    uint16_t rtp_port = DEFAULT_RTP_PORT;//默认端口号
     uint16_t rtcp_port = DEFAULT_RTCP_PORT;
     
     char rtsp_url[256];
@@ -181,7 +202,7 @@ int main(int argc, char *argv[]) {
                 height = atoi(optarg);
                 break;
             case 'r':
-                rtp_port = atoi(optarg);
+                rtp_port = atoi(optarg);//可以自行更改端口号
                 rtcp_port = rtp_port + 1;
                 break;
             case 't':
@@ -300,13 +321,13 @@ int main(int argc, char *argv[]) {
     
     /* 3. SETUP */
     printf("\n[3] 发送SETUP请求...\n");
-    if(strcmp(transType,"tcp") == 0){
+    if(strcmp(transType,"tcp") == 0){//使用tcp传输
         snprintf(transport, sizeof(transport),"RTP/AVP/TCP;unicast;interleaved=0-1");
     }else{
         snprintf(transport, sizeof(transport),"RTP/AVP/UDP;unicast;client_port=%d-%d", rtp_port, rtcp_port);
     }
     
-    if (rtsp_client_setup(&session, rtsp_url, transport) < 0) {
+    if (rtsp_client_setup(&session, rtsp_url, transport) < 0) {//使用tcp传输
         fprintf(stderr, "发送SETUP请求失败\n");
         goto cleanup;
     }
@@ -315,15 +336,14 @@ int main(int argc, char *argv[]) {
         goto cleanup;
     }
     
- 
-        /* 解析SETUP响应，获取服务器端口和Session ID */
+    /* 解析SETUP响应，获取服务器端口和Session ID以及kcpId*/
     if (rtsp_parse_setup_response(response, &session) < 0) {
         fprintf(stderr, "解析SETUP响应失败\n");
         goto cleanup;
     }
     printf("服务器RTP端口: %d, RTCP端口: %d\n", session.server_rtp_port, session.server_rtcp_port);
     printf("Session ID: %s\n", session.session_id);
-    
+
     /* 初始化UDP socket用于RTP传输（发送到服务器） */
     if (udp_init(&session.rtp_socket, server_ip, session.server_rtp_port) < 0) {
         fprintf(stderr, "初始化UDP socket失败\n");
@@ -332,8 +352,10 @@ int main(int argc, char *argv[]) {
     
     session.state = RTSP_STATE_READY;
     
+    session.kcp = kcp_init(&session.rtp_socket);
     /* 4. RECORD（开始推流） */
     printf("\n[4] 发送RECORD请求...\n");
+    
     if (rtsp_client_record(&session, rtsp_url) < 0) {
         fprintf(stderr, "发送RECORD请求失败\n");
         goto cleanup;
@@ -344,7 +366,9 @@ int main(int argc, char *argv[]) {
     }
     session.state = RTSP_STATE_PLAYING; /* 用PLAYING标识推流进行中 */
     printf("\n=== 开始发送视频流（RECORD）===\n");
-    
+    // pthread_t tid;
+    // pthread_create(&tid, NULL, kcp_timer_thread, (void*)session.kcp);//启动kcp定时器线程
+    // pthread_detach(tid);
     /* 启动视频流发送线程 */
     if (pthread_create(&video_thread, NULL, video_stream_thread, &session) != 0) {
         fprintf(stderr, "创建视频流线程失败\n");
@@ -352,12 +376,115 @@ int main(int argc, char *argv[]) {
     }
     pthread_detach(video_thread);
     
-    /* 主循环：保持连接并处理可能的RTSP消息 */
-    while (running) {
-        /* 可以在这里处理服务器发来的RTSP消息（如TEARDOWN） */
-        usleep(1000000);  /* 1秒检查一次 */
+    // /* 主循环：保持连接并处理可能的RTSP消息 */
+    // while (running) {
+    //     /* 可以在这里处理服务器发来的RTSP消息（如TEARDOWN） */
+    //     usleep(1000000);  /* 1秒检查一次 */
+    // }
+    int maxfd;
+    fd_set read_fds;
+    struct timeval tv;
+    IUINT32 next_kcp_update_time;
+    maxfd = session.client.fd;
+    if (session.rtp_socket.fd > maxfd) {
+        maxfd = session.rtp_socket.fd;
     }
-    
+    next_kcp_update_time = iclock();
+    while(running){
+        IUINT32 current_ms = iclock();
+        long wait_ms;
+        if (current_ms >= next_kcp_update_time) {
+            // 时间已到或已过期，驱动 KCP
+            ikcp_update(session.kcp, current_ms);
+            // 计算下一次更新时间
+            next_kcp_update_time = ikcp_check(session.kcp, current_ms);
+        }
+        if (next_kcp_update_time > current_ms) {
+            wait_ms = (long)(next_kcp_update_time - current_ms);
+            // 确保等待时间不超过 1 秒（防止意外长时间等待）
+            if (wait_ms > 1000) wait_ms = 1000;
+        } else {
+            // 理论上不会发生，但作为保护，确保select不会阻塞
+            wait_ms = 1; 
+        }
+        tv.tv_sec = wait_ms / 1000;
+        tv.tv_usec = (wait_ms % 1000) * 1000;
+        FD_ZERO(&read_fds);
+        FD_SET(session.client.fd, &read_fds); // RTSP TCP
+        FD_SET(session.rtp_socket.fd, &read_fds); // KCP UDP
+        set_socket_nonblocking(session.rtp_socket.fd);
+        int activity = select(maxfd + 1, &read_fds, NULL, NULL, &tv);
+        
+        if (activity < 0) {
+            if (running) {
+                perror("select error");
+            }
+            break;
+        }
+        
+        if (activity == 0) {
+            // 超时，继续循环，让 KCP 驱动逻辑在下一次循环中处理 ikcp_update
+            continue;
+        }
+
+        // ----------------------------------------------------
+        // 处理 I/O 事件
+        // ----------------------------------------------------
+        
+        // A. RTSP TCP Socket (接收 TEARDOWN, PAUSE 等控制)
+        if (FD_ISSET(session.client.fd, &read_fds)) {
+            // 注意: 假设 rtsp_client_read_response 能处理非阻塞或 EAGAIN 的情况
+            int len = rtsp_client_read_response(&session, response, sizeof(response));
+            
+            if (len > 0) {
+                LOG_INFO("Received RTSP control message:\n%.*s", len, response);
+                // 简单的退出逻辑：收到 TEARDOWN 或错误时停止
+                if (strstr(response, "TEARDOWN") || strstr(response, "400")) {
+                    LOG_WARNING("Server requested TEARDOWN or error. Stopping.");
+                    running = 0;
+                }
+            } else if (len == 0) {
+                LOG_ERROR("RTSP server closed the TCP connection (FIN). Stopping.");
+                running = 0;
+            } else {
+                // 读取错误 (若非 EAGAIN/EWOULDBLOCK，则视为致命错误)
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    perror("RTSP TCP read error");
+                    running = 0;
+                }
+            }
+        }
+
+        // B. KCP UDP Socket (接收 ACK 或 RTCP)
+        if (FD_ISSET(session.rtp_socket.fd, &read_fds)) {
+            char udp_buffer[MAX_BUFFER_SIZE]; 
+            ssize_t n;
+            // 循环读取所有待处理的 UDP 包
+            while (true) {
+                n = udp_recv(&session.rtp_socket, udp_buffer, sizeof(udp_buffer));
+                if (n > 0) {
+                    // 正常接收数据，喂给 KCP
+                    ikcp_input(session.kcp, udp_buffer, (int)n);
+                    // LOG_DEBUG("Received UDP packet (len=%zd) and fed to KCP.", n);
+                } else if (n == -1) {
+                    // 区分 EAGAIN（无数据）和真错误
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        // 无数据，退出循环（无需打印错误）
+                        break;
+                    } else {
+                        // 真错误，打印并处理
+                        LOG_ERROR("UDP recv error: %s", strerror(errno));
+                        break;
+                    }
+                } else { // n == 0，UDP 无连接，n=0 无意义
+                    break;
+                }
+            }
+        }
+    }
+
+
+
     printf("\n正在关闭...\n");
     
 cleanup:
@@ -369,13 +496,13 @@ cleanup:
     
     /* 等待视频流线程退出 */
     usleep(200000);
-    // fclose(h264_file);
+    fclose(h264_file);
     /* 清理资源 */
     h264_encoder_cleanup(&encoder);
     v4l2_stream_off();
     v4l2_cleanup();
     rtsp_session_cleanup(&session);
-    
+    ikcp_release(session.kcp);
     printf("程序退出\n");
     return 0;
 }

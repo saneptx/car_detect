@@ -1,12 +1,13 @@
 CXX := g++
-CXXFLAGS := -std=c++14 -O2 -Wall -Wextra -Wno-unused-parameter -Ireactor -Imedia -g -fsanitize=address -fno-omit-frame-pointer
+CXXFLAGS := -std=c++14 -O2 -Wall -Wextra -Wno-unused-parameter -Ireactor -Imedia -g -O0 -fsanitize=address -fno-omit-frame-pointer
 LDFLAGS := -llog4cpp -lavformat -lavcodec -lavutil -lswscale -L/usr/lib/x86_64-linux-gnu -lSDL2 -lpthread -fsanitize=address
 
 # 自动收集源码
 REACTOR_SRCS := $(wildcard reactor/*.cc)
 MEDIA_SRCS := $(wildcard media/*.cc)
 SERVER_SRC := RtspServer.cc
-SRCS := $(REACTOR_SRCS) $(MEDIA_SRCS) $(SERVER_SRC)
+IKCP_SRC := media/ikcp.c
+SRCS := $(REACTOR_SRCS) $(MEDIA_SRCS) $(SERVER_SRC) $(IKCP_SRC)
 
 # 生成对应的对象文件到 build 目录
 BUILD_DIR := build

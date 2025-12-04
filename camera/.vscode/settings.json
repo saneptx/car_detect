@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "turbojpeg.h": "c",
+        "x264.h": "c",
+        "ikcp.h": "c",
+        "time.h": "c",
+        "kcp.h": "c",
+        "unistd.h": "c",
+        "rtsp.h": "c"
+    }
+}

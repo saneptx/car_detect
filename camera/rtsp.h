@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <pthread.h>
+#include "kcp.h"
 
 #define RTSP_BUFFER_SIZE 2048
 #define MTU 1400
@@ -24,6 +25,7 @@ typedef enum {
 typedef struct rtsp_session {
     tcp_client_t client;
     rtsp_state_t state;
+    ikcpcb *kcp;
     char session_id[64];
     int cseq;
     //udp传输
@@ -41,7 +43,7 @@ typedef struct rtsp_session {
     uint32_t rtp_timestamp;
     /* 来自DESCRIBE/SDP解析的信息 */
     char content_base[RTSP_MAX_URL];
-    char control_attr[128];
+    char control_attr[256];
     char setup_url[RTSP_MAX_URL];
     int payload_type;   /* 如 96 */
     int clock_rate;     /* 如 90000 */
@@ -98,13 +100,12 @@ int rtsp_parse_setup_response(const char *response, rtsp_session_t *session);
 /* 解析DESCRIBE响应（含SDP），并构建后续SETUP使用的URL */
 int rtsp_parse_describe_response(rtsp_session_t *session, const char *request_url, const char *response);
 
-/* 基于session->setup_url自动发起SETUP */
-int rtsp_client_setup_auto(rtsp_session_t *session, const char *transport);
+// /* 基于session->setup_url自动发起SETUP */
+// int rtsp_client_setup_auto(rtsp_session_t *session, const char *transport);
 
 /* 发送ANNOUNCE请求（包含SDP）*/
 int rtsp_client_announce(rtsp_session_t *session, const char *url, const char *sdp);
 
 /* 发送RECORD请求 */
 int rtsp_client_record(rtsp_session_t *session, const char *url);
-
 #endif

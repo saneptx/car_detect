@@ -30,10 +30,16 @@ int udp_init(udp_socket_t *udp, const char *ip, int port) {
 int udp_send(udp_socket_t *udp, const void *buf, int len) {
     int n = sendto(udp->fd, buf, len, 0, 
                    (struct sockaddr *)&udp->addr, sizeof(udp->addr));
+    // LOG_DEBUG("UDP SEND %d data",n);
     if (n < 0) {
         perror("udp sendto");
         return -1;
     }
+    return n;
+}
+
+int udp_recv(udp_socket_t *udp, void *buf, int len){
+    int n = recv(udp->fd, buf, len,MSG_DONTWAIT);
     return n;
 }
 

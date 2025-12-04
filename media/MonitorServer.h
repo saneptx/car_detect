@@ -9,6 +9,9 @@
 #include <sys/epoll.h>
 #include "UdpConnection.h"
 #include "InetAddress.h"
+extern "C"{
+#include "ikcp.h"
+}
 // 简单的多路监控服务器（独立线程）：
 // - 在一个 TCP 端口上接受 Qt 客户端
 // - 将每条推流(session)的 H264 NALU 按自定义协议转发出去
@@ -18,15 +21,16 @@
 // [uint32_t timestamp]
 // [uint32_t frameLen][frame bytes]
 
-struct udpPort{
+struct udpSession{
     InetAddress _videoUdpRtp;
-    InetAddress _videoUdpRtcp; 
+    InetAddress _videoUdpRtcp;
+    ikcpcb * ikcp;
 };
 
 struct QtClient{
     int tcpFd;
     std::string _clientIp;      // 客户端IP
-    map<std::string,udpPort> _portMap;
+    map<std::string,udpSession> _sessionMap;
     std::string _buffer;
     int Cseq;
 };

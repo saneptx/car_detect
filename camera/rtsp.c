@@ -114,7 +114,9 @@ void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
         if (strcmp(session->transType, "tcp") == 0)
             send_rtp_over_tcp(session, packet, pkt_len, session->rtpChannel);
         else
-            udp_send(&session->rtp_socket, packet, pkt_len);
+            // udp_send(&session->rtp_socket, packet, pkt_len);
+            send_rtp_over_kcp(packet,pkt_len,session->kcp);
+
     }else{
         // FU-A 分片发送
         uint8_t packet[MTU-4];//rtsp区分留四个字节空位
@@ -162,7 +164,8 @@ void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
             if (strcmp(session->transType, "tcp") == 0)
                 send_rtp_over_tcp(session, packet, offset, session->rtpChannel);
             else
-                udp_send(&session->rtp_socket, packet, offset);
+                // udp_send(&session->rtp_socket, packet, offset);
+                send_rtp_over_kcp(packet,offset,session->kcp);
             pos += len;
             isStart = false;
         }
@@ -278,8 +281,9 @@ int rtsp_client_record(rtsp_session_t *session, const char *url) {
         "CSeq: %d\r\n"
         "Session: %s\r\n"
         "User-Agent: RTSP Client\r\n"
+        "KcpId: %d\r\n"
         "\r\n",
-        url, session->cseq, session->session_id);
+        url, session->cseq, session->session_id,session->kcp->conv);
     printf("发送RECORD请求:\n%s\n", request);
     return tcp_write(&session->client, request, len);
 }
@@ -361,7 +365,6 @@ int rtsp_parse_setup_response(const char *response, rtsp_session_t *session)
         return 0;
     }
 
-    /* 未找到任何传输字段 */
     return -1;
 }
 
@@ -476,7 +479,7 @@ int rtsp_parse_describe_response(rtsp_session_t *session, const char *request_ur
     return 0;
 }
 
-int rtsp_client_setup_auto(rtsp_session_t *session, const char *transport) {
-    if (!session || session->setup_url[0] == '\0') return -1;
-    return rtsp_client_setup(session, session->setup_url, transport);
-}
+// int rtsp_client_setup_auto(rtsp_session_t *session, const char *transport) {
+//     if (!session || session->setup_url[0] == '\0') return -1;
+//     return rtsp_client_setup(session, session->setup_url, transport);
+// }

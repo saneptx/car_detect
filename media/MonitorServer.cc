@@ -126,7 +126,7 @@ void MonitorServer::acceptLoop() {
                         for(auto e:_cams){
                             extraHeaders[std::to_string(i)]=e.first;
                             i++;
-                        }
+                        }    
                         sendRespond(extraHeaders, _qtClients[fd]);
                     } else if(method == "MESSAGE"){
                         std::lock_guard<std::mutex> lock(_mtx);
@@ -139,8 +139,11 @@ void MonitorServer::acceptLoop() {
                             while (std::getline(iss, port, ' ')) {
                                 ports.push_back(static_cast<unsigned short>(std::stoul(port)));
                             }
-                            _qtClients[fd]._portMap[e.first]._videoUdpRtp = InetAddress(_qtClients[fd]._clientIp,ports[0]);
-                            _qtClients[fd]._portMap[e.first]._videoUdpRtcp = InetAddress(_qtClients[fd]._clientIp,ports[1]);
+                            auto rtpAddr = InetAddress(_qtClients[fd]._clientIp,ports[0]);
+                            auto rtcpAddr = InetAddress(_qtClients[fd]._clientIp,ports[1]);
+                            _qtClients[fd]._sessionMap[e.first]._videoUdpRtp = rtpAddr;
+                            _qtClients[fd]._sessionMap[e.first]._videoUdpRtcp = rtcpAddr;
+                            // _qtClients[fd]._sessionMap[e.first].ikcp = ikcp_create(++_conv, &rtpAddr);
                         }
                     } else if(method == "ADDCAM"){//收到qt端发送的添加端口信息，更新列表
                         LOG_DEBUG("Recieved Qt Client ADDCAM Respond");
@@ -154,8 +157,8 @@ void MonitorServer::acceptLoop() {
                             while (std::getline(iss, port, ' ')) {
                                 ports.push_back(static_cast<unsigned short>(std::stoul(port)));
                             }
-                            _qtClients[fd]._portMap[e.first]._videoUdpRtp = InetAddress(_qtClients[fd]._clientIp,ports[0]);
-                            _qtClients[fd]._portMap[e.first]._videoUdpRtcp = InetAddress(_qtClients[fd]._clientIp,ports[1]);
+                            _qtClients[fd]._sessionMap[e.first]._videoUdpRtp = InetAddress(_qtClients[fd]._clientIp,ports[0]);
+                            _qtClients[fd]._sessionMap[e.first]._videoUdpRtcp = InetAddress(_qtClients[fd]._clientIp,ports[1]);
                         }
                     }
                 }
@@ -275,8 +278,8 @@ void MonitorServer::onNaluTcp(const std::string &streamName,
 void MonitorServer::onNaluUdp(std::string sessionId,const uint8_t *data, size_t len){
     for (auto &m : _qtClients) {
         ::sendto(_udpServerRtpFd,data,len,MSG_DONTWAIT,//非阻塞发送
-            (struct sockaddr*)m.second._portMap[sessionId]._videoUdpRtp.getInetAddrPtr(),
-            m.second._portMap[sessionId]._videoUdpRtp.getInetAddrLen());
+            (struct sockaddr*)m.second._sessionMap[sessionId]._videoUdpRtp.getInetAddrPtr(),
+            m.second._sessionMap[sessionId]._videoUdpRtp.getInetAddrLen());
         // LOG_DEBUG("Send to QtClient %d data",n);
     }
 }
@@ -323,7 +326,7 @@ void MonitorServer::addCam(std::string sessionId,std::string stringName){//向qt
         return;
     }
     for(auto qtc : _qtClients){
-        if(!qtc.second._portMap.count(sessionId)){//qt端没有添加该摄像头信息
+        if(!qtc.second._sessionMap.count(sessionId)){//qt端没有添加该摄像头信息
             std::string addCamReq = "ADDCAM " + _server.toString() + "\r\n"
                                     "Cseq: " + std::to_string(++qtc.second.Cseq) + "\r\n"
                                     "SessionId: " + sessionId + "\r\n\r\n";
@@ -337,12 +340,12 @@ void MonitorServer::removeCam(std::string sessionId){
     std::lock_guard<std::mutex> lock(_mtx);
     _cams.erase(sessionId);
     for(auto qtc : _qtClients){
-        if(qtc.second._portMap.count(sessionId)){//qt端有该摄像头信息
+        if(qtc.second._sessionMap.count(sessionId)){//qt端有该摄像头信息
             std::string addCamReq = "DELCAM " + _server.toString() + "\r\n"
                                     "Cseq: " + std::to_string(qtc.second.Cseq) + "\r\n"
                                     "SessionId: " + sessionId + "\r\n\r\n";
             ::send(qtc.second.tcpFd,addCamReq.c_str(),addCamReq.size(),0);
-            qtc.second._portMap.erase(sessionId);
+            qtc.second._sessionMap.erase(sessionId);
         }
     }
 }

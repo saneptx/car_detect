@@ -56,7 +56,7 @@ void UdpSocket::setReusePort(){
 }
 
 int UdpSocket::bind() {
-    int ret = ::bind(_fd, (struct sockaddr *)_serverAddr.getInetAddrPtr(), sizeof(struct sockaddr_in));
+    int ret = ::bind(_fd, (struct sockaddr *)_serverAddr.getInetAddrPtr(), _clientAddr.getInetAddrLen());
     if (ret == -1) {
         perror("bind");
     }
@@ -64,7 +64,7 @@ int UdpSocket::bind() {
 }
 
 int UdpSocket::sendto(const void* data, size_t len) {
-    int ret = ::sendto(_fd, data, len, 0, (struct sockaddr *)_clientAddr.getInetAddrPtr(), sizeof(struct sockaddr_in));
+    int ret = ::sendto(_fd, data, len, 0, (struct sockaddr *)_clientAddr.getInetAddrPtr(), _clientAddr.getInetAddrLen());
     if (ret == -1) {
         perror("sendto");
     }

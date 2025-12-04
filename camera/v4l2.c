@@ -1,7 +1,6 @@
 #include "v4l2.h"
 #include <stdint.h>
 #include <turbojpeg.h>
-/* 注意：需要安装libx264-dev库 */
 #include <x264.h>
 
 
@@ -248,7 +247,7 @@ int h264_encoder_init(h264_encoder_t *encoder, int width, int height, int fps) {
     param.b_repeat_headers = 1; /* 每个IDR重复 SPS/PPS，便于新客户端加入 */
     param.i_csp = X264_CSP_I422;
     
-    x264_param_apply_profile(&param, "baseline");
+    // x264_param_apply_profile(&param, "baseline");
     x264_param_apply_profile(&param, "high422");
     
     x264_enc = x264_encoder_open(&param);
@@ -284,16 +283,15 @@ int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
     int ret = -1;
 
     // ---------------------------
-    // 1. 分配 x264 picture（必须先做）
+    // 1. 分配 x264 picture
     // ---------------------------
     if (x264_picture_alloc(&pic_in, X264_CSP_I422,
                            encoder->width, encoder->height) < 0) {
         fprintf(stderr, "x264_picture_alloc failed\n");
         return -1;
     }
-
     // ---------------------------
-    // 2. TurboJPEG 解码到 I420（正确方式）
+    // 2. TurboJPEG 解码到 I420
     // ---------------------------
     unsigned char *planes[3];
     int strides[3];
@@ -301,7 +299,7 @@ int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
     planes[0] = pic_in.img.plane[0];
     planes[1] = pic_in.img.plane[1];
     planes[2] = pic_in.img.plane[2];
-
+ 
     strides[0] = pic_in.img.i_stride[0];
     strides[1] = pic_in.img.i_stride[1];
     strides[2] = pic_in.img.i_stride[2];

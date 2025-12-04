@@ -8,7 +8,9 @@
 #include <map>
 #include "SessionManager.h"
 #include <memory>
-
+extern "C"{
+#include "ikcp.h"
+}
 class TcpConnection;
 class UdpConnection;
 class EventLoop;
@@ -22,7 +24,6 @@ enum class RtspState {
     READY,     // SETUP完成，准备播放
     PLAYING    // 正在播放
 };
-
 class RtspConnect : public std::enable_shared_from_this<RtspConnect> {
 public:
     RtspConnect(std::shared_ptr<TcpConnection> tcpConn, EventLoop* loop);
@@ -84,6 +85,14 @@ private:
     // 从完整请求中提取body（按Content-Length）
     std::string extractBody(const std::string& request, const std::map<std::string, std::string>& headers);
     
+    uint32_t iclock() {
+        using namespace std::chrono;
+        return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+    }
+    void kcp_update_thread();
+    // void initCamKcp(uint32_t conv,kcpClient_t *kcpClient);
+    void initCamKcp(uint32_t conv,UdpConnectionPtr kcpClient);
+    
 private:
     std::weak_ptr<TcpConnection> _tcpConn;
     EventLoop* _loop;
@@ -92,8 +101,11 @@ private:
     std::string _serverIp;
     RtspSession _session;
     std::string _sdp; // 客户端通过ANNOUNCE提供的SDP
-    // std::unique_ptr<RtpH264Unpacker> _RtpUnpacker;
     static SessionManager _sessionManager;
+    ikcpcb *_camKcp;
+    std::atomic<bool> _kcpRunning{false};
+    std::thread _kcpThread;
+    std::mutex _kcpMutex;
 };
 
 #endif

@@ -22,8 +22,8 @@ public:
     explicit UdpConnection(const string &ip,unsigned short port,InetAddress peerAddr, EventLoop* loopPtr);
     ~UdpConnection();
     
-    void send(const std::string& msg);
-    void sendInLoop(const std::string& msg);
+    int send(const std::string& msg,int len);
+    void sendInLoop(const std::string& msg,int len);
     int recv(void *buff,size_t len);
     
     // 回调函数注册
