@@ -19,6 +19,8 @@ SOURCES += \
     decoderworker.cpp \
     h264rtpreassembler.cpp \
     h264decoder.cpp \
+    ikcp.c \
+    kcphandler.cpp \
     main.cpp \
     monitorclientwidget.cpp \
     multistreamdecoder.cpp \
@@ -28,6 +30,8 @@ HEADERS += \
     decoderworker.h \
     h264rtpreassembler.h \
     h264decoder.h \
+    ikcp.h \
+    kcphandler.h \
     monitorclientwidget.h \
     multistreamdecoder.h \
     videoopenglwidget.h

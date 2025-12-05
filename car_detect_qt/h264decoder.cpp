@@ -112,9 +112,9 @@ bool H264Decoder::decode(const uint8_t *data, int len,
     /*解析 NALU，更新 SPS/PPS，视频帧进行解码*/
     ret = avcodec_send_packet(_codecCtx, _packet);
     if (ret < 0) {
-        qWarning() << "H264Decoder: avcodec_send_packet failed:" << ret;
-        av_packet_unref(_packet); // 失败时释放包
-        return false;
+//        qWarning() << "H264Decoder: avcodec_send_packet failed:" << ret;
+//        av_packet_unref(_packet); // 失败时释放包
+//        return false;
     }
 
     while (true) {

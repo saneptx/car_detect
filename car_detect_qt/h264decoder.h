@@ -47,7 +47,7 @@ private:
     AVCodecContext *_codecCtx    = nullptr;//解码器上下文
     AVPacket       *_packet      = nullptr;//存放原始数据H.264
     AVFrame        *_frame       = nullptr;//存放解码后的数据YUV
-    SwsContext     *_swsCtx      = nullptr;
+//    SwsContext     *_swsCtx      = nullptr;
 //    int             _dstW        = 0;
 //    int             _dstH        = 0;
     bool            _ok          = false;

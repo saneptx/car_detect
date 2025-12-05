@@ -11,36 +11,19 @@
 #include "h264decoder.h"
 #include "h264rtpreassembler.h"
 #include "multistreamdecoder.h"
-
-
-static RtpPacket parseRtp(const QByteArray &ba)
-{
-    RtpPacket pkt{};
-    const uint8_t* p = (const uint8_t*)ba.constData();
-
-    pkt.vpxcc      = p[0];
-    pkt.mpt        = p[1];
-    pkt.marker     = (pkt.mpt & 0x80) != 0;
-    pkt.seq        = (p[2] << 8) | p[3];
-    pkt.timestamp  = (p[4] << 24) | (p[5] << 16) | (p[6] << 8) | p[7];
-    pkt.ssrc       = (p[8] << 24) | (p[9] << 16) | (p[10] << 8) | p[11];
-
-    int headerLen = 12;
-    pkt.payload    = p + headerLen;
-    pkt.payloadLen = ba.size() - headerLen;
-
-    return pkt;
-}
+#include "kcphandler.h"
 
 struct transUdpPort{
     QUdpSocket * _udpRtpSocket;
     QUdpSocket * _udpRtcpSocket;
+    uint32_t conv;
 };
 
 class MonitorClientWidget: public QWidget{
     Q_OBJECT
 public:
      explicit MonitorClientWidget(QWidget *parent = nullptr);
+    ~MonitorClientWidget();
 private slots:
     void onConnected();
     void onError(QAbstractSocket::SocketError);
@@ -55,7 +38,7 @@ private slots:
 
 private:
     void processBuffer();
-    void handleRtpPacket(const QString &streamName,const QByteArray &packet);
+//    void handleRtpPacket(const QString &streamName,const QByteArray &packet);
     void handleFrame(const QString &streamName,const QByteArray &frame);
 
     QTcpSocket *_socket;
@@ -64,15 +47,16 @@ private:
     QGridLayout *_grid;
     int _cseq = 0;
     // 每路一个 QLabel，用于显示画面
-   QMap<QString, VideoOpenGLWidget *> _videoWidgets;
+    QMap<QString, VideoOpenGLWidget *> _videoWidgets;
+    FILE* f;
+    // RTP → H264 一帧
+    H264RtpReassembler _h264RtpReassmbler;
 
-   // RTP → H264 一帧
-   H264RtpReassembler _h264;
-
-   // 多路解码管理器（内部有 DecoderWorker + QThread）
-   MultiStreamDecoder _decoderMgr;
-
-   quint16 _lastSeq;
+    // 多路解码管理器（内部有 DecoderWorker + QThread）
+    MultiStreamDecoder _decoderMgr;
+    uint32_t _conv = 1000;
+    quint16 _lastSeq;
+    QMutex _mtx;
 };
 
 #endif // MONITORCLIENTWIDGET_H

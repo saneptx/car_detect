@@ -1,14 +1,5 @@
 #include "monitorclientwidget.h"
-//#include <QVBoxLayout>
-//#include <QHBoxLayout>
-//#include <QDebug>
-//#include <QtEndian>
-//#include <QNetworkProxy>
-//#include <QtConcurrent/QtConcurrentRun>
-//#include <QMutexLocker>
-//#include <QDateTime>
-//#include <QElapsedTimer>
-//#include <algorithm>
+
 #include <QVBoxLayout>
 #include <QDebug>
 #include <QtEndian>
@@ -31,7 +22,7 @@ MonitorClientWidget::MonitorClientWidget(QWidget *parent)
     qDebug() << "MonitorClientWidget()";
     auto layout = new QVBoxLayout(this);
     layout->addLayout(_grid);
-
+    f = fopen("debug.h264", "wb");
     connect(_socket, &QTcpSocket::connected,
             this, &MonitorClientWidget::onConnected);
     connect(_socket, &QTcpSocket::readyRead,
@@ -43,11 +34,14 @@ MonitorClientWidget::MonitorClientWidget(QWidget *parent)
     _socket->setProxy(QNetworkProxy::NoProxy);
     _socket->connectToHost(QString::fromLatin1(SERVER_IP), SERVER_PORT);
     // H264RtpReassembler 组好一"帧" H.264 时回调这里
-    _h264.onFrameReady = [this](const QString &streamName, const QByteArray &frame) {
+    _h264RtpReassmbler.onFrameReady = [this](const QString &streamName, const QByteArray &frame) {
         // frame 是完整一帧 H.264（含 00 00 00 01 start code）
         handleFrame(streamName, frame);
-        // 如果还想 dump 到文件调试，可以在这里写 test.h264
     };
+}
+
+MonitorClientWidget::~MonitorClientWidget(){
+    fclose(f);
 }
 
 void MonitorClientWidget::onConnected()
@@ -74,63 +68,53 @@ void MonitorClientWidget::onReadyRead()
     parseRespond(request,first,second,headers);
     if(headers.contains("CamNum")&&headers["CamNum"]!="0"){
         for(int i=0;i<headers["CamNum"].toInt();i++){
+            QString stringName = headers[QString::number(i)];
             transUdpPort udpPort;
             udpPort._udpRtpSocket = new QUdpSocket(this);
             udpPort._udpRtpSocket->bind(_socket->localAddress(), 0);
-            QUdpSocket* socketPtr = udpPort._udpRtpSocket;
-            QString stringName = headers[QString::number(i)];
-            connect(socketPtr, &QUdpSocket::readyRead,[this,socketPtr,stringName]{
-                while(socketPtr->hasPendingDatagrams()){
-                    // 1. 获取下一个数据报的大小
-                    qint64 datagramSize = socketPtr->pendingDatagramSize();
-                    // 2. 创建一个足够大的 QByteArray 来存储数据
-                    QByteArray datagram;
-                    datagram.resize(static_cast<int>(datagramSize));
-                    // 3. 准备存储发送方的地址和端口
-                    QHostAddress senderAddress;
-                    quint16 senderPort;
-                    // 4. 读取数据报
-                   socketPtr->readDatagram(datagram.data(), datagram.size(),
-                                              &senderAddress, &senderPort);
-                   handleRtpPacket(stringName,datagram);
 
-                }
+            KcpHandler* kcphandler = new KcpHandler(this);
+            _mtx.lock();
+            ++_conv;
+            _mtx.unlock();
+            udpPort.conv = _conv;
+            QHostAddress addr = _socket->peerAddress();
+            kcphandler->initKcp(_conv,addr,8910,udpPort._udpRtpSocket);
+            connect(udpPort._udpRtpSocket, &QUdpSocket::readyRead, [kcphandler,stringName]{
+                kcphandler->handleReadyRead(stringName);
             });
+            connect(kcphandler,&KcpHandler::dataReceived,
+                             &_h264RtpReassmbler,
+                             &H264RtpReassembler::handleRtp);
             udpPort._udpRtcpSocket = new QUdpSocket(this);
             udpPort._udpRtcpSocket->bind(_socket->localAddress(), 0);
             _camMap[stringName] = udpPort;
         }
         sendMessage();
     }else if(first == "ADDCAM"){
-        qDebug()<<"Recive ADDCAM Request";
         if(headers.contains("SessionId")){
-            QString sessionId = headers["SessionId"];
+            QString stringName = headers["SessionId"];
             transUdpPort udpPort;
             udpPort._udpRtpSocket = new QUdpSocket(this);
             udpPort._udpRtpSocket->bind(_socket->localAddress(), 0);
-            QUdpSocket* socketPtr = udpPort._udpRtpSocket;
-            QString stringName = headers[sessionId];
-            connect(socketPtr, &QUdpSocket::readyRead,[this,socketPtr,stringName]{
-                while(socketPtr->hasPendingDatagrams()){
-                    // 1. 获取下一个数据报的大小
-                    qint64 datagramSize = socketPtr->pendingDatagramSize();
-                    // 2. 创建一个足够大的 QByteArray 来存储数据
-                    QByteArray datagram;
-                    datagram.resize(static_cast<int>(datagramSize));
-                    // 3. 准备存储发送方的地址和端口
-                    QHostAddress senderAddress;
-                    quint16 senderPort;
-                    // 4. 读取数据报
-                   socketPtr->readDatagram(datagram.data(), datagram.size(),
-                                              &senderAddress, &senderPort);
-                   handleRtpPacket(stringName,datagram);
 
-                }
+            KcpHandler* kcphandler = new KcpHandler(this);
+            _mtx.lock();
+            ++_conv;
+            _mtx.unlock();
+            udpPort.conv = _conv;
+            QHostAddress addr = _socket->peerAddress();
+            kcphandler->initKcp(_conv,addr,8910,udpPort._udpRtpSocket);
+            connect(udpPort._udpRtpSocket, &QUdpSocket::readyRead, kcphandler, [kcphandler,stringName]{
+                kcphandler->handleReadyRead(stringName);
             });
+            connect(kcphandler,&KcpHandler::dataReceived, // <-- 使用 &KcpHandler::信号名
+                             &_h264RtpReassmbler,      // <-- 接收者对象
+                             &H264RtpReassembler::handleRtp); // <-- 使用 &类名::槽名
             udpPort._udpRtcpSocket = new QUdpSocket(this);
             udpPort._udpRtcpSocket->bind(_socket->localAddress(), 0);
-            _camMap[sessionId] = udpPort;
-            sendAddCamRespond(sessionId);
+            _camMap[stringName] = udpPort;
+            sendAddCamRespond(stringName);
         }
     }else if(first == "DELCAM"){
         if(headers.contains("SessionId")){
@@ -228,6 +212,8 @@ void MonitorClientWidget::sendMessage(){
                        + QString::number(i.value()._udpRtpSocket->localPort())
                        + " "
                        + QString::number(i.value()._udpRtcpSocket->localPort())
+                       + " "
+                       + QString::number(i.value().conv)
                        + "\r\n");
     }
     request.append("\r\n");
@@ -247,7 +233,10 @@ void MonitorClientWidget::sendAddCamRespond(QString sessionId){
     QString request = "ADDCAM " + localIp + ":" + localPortStr + "\r\n"
                       "Cseq: " + QString::number(++_cseq) + "\r\n";
     request.append(sessionId + ": " + QString::number(_camMap[sessionId]._udpRtpSocket->localPort())
-                             + " " + QString::number(_camMap[sessionId]._udpRtcpSocket->localPort())
+                             + " "
+                             + QString::number(_camMap[sessionId]._udpRtcpSocket->localPort())
+                             + " "
+                             + QString::number(_conv)
                              + "\r\n");
     request.append("\r\n");
     QByteArray requestData = request.toUtf8();
@@ -284,23 +273,12 @@ void MonitorClientWidget::sendAddCamRespond(QString sessionId){
 //        handleRtpPacket(streamName,rtpPacket);
 //    }
 //}
-
-void MonitorClientWidget::handleRtpPacket(const QString &streamName,const QByteArray &packet){
-    RtpPacket pkt = parseRtp(packet);
-    quint16 currentSeq = pkt.seq;
-    if (currentSeq == _lastSeq)
-    {
-        // 这是重复包
-//        qDebug() << "Dropped duplicate RTP packet. Seq:" << currentSeq;
-        return;
-    }
-    _h264.handleRtp(streamName,pkt);
-    _lastSeq = currentSeq;
-}
-
 // 收到一整帧 H.264（Annex B，含起始码）
 void MonitorClientWidget::handleFrame(const QString &streamName, const QByteArray &frame)
 {
+    if (f) {
+        fwrite(frame.data(), 1, frame.size(), f);
+    }
     // 如果该 stream 还没有 QLabel + 解码线程，就在这里创建
     if (!_videoWidgets.contains(streamName)) {
         int idx = _videoWidgets.size();
