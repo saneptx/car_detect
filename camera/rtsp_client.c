@@ -41,7 +41,7 @@ static int set_socket_nonblocking(int fd) {
 static int running = 1;
 static h264_encoder_t encoder;
 static rtsp_session_t session;
-FILE *h264_file;
+// FILE *h264_file;
 /* 信号处理 */
 void signal_handler(int sig) {
     (void)sig;
@@ -95,7 +95,7 @@ void *video_stream_thread(void *arg) {
         fprintf(stderr, "无法为H264输出分配内存: %zu字节\n", h264_buf_size);
         return NULL;
     }
-    h264_file = fopen("original.h264", "wb");
+    // h264_file = fopen("original.h264", "wb");
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
     printf("视频流线程启动\n");
@@ -110,9 +110,9 @@ void *video_stream_thread(void *arg) {
         /* 解码MJPEG并编码为H264 */
         if (mjpeg_to_h264(&encoder, mjpeg_data, mjpeg_size, h264_data,
                           h264_buf_size, &h264_len) == 0 && h264_len > 0) {
-            if(h264_file){
-                fwrite(h264_data, 1, h264_len, h264_file);
-            }
+            // if(h264_file){
+            //     fwrite(h264_data, 1, h264_len, h264_file);
+            // }
             /* 发送RTP包到服务器 */
             nalu_view_t nalus[32];
             int n = split_annexb_nalus(h264_data, h264_len, nalus, 32);
@@ -496,7 +496,7 @@ cleanup:
     
     /* 等待视频流线程退出 */
     usleep(200000);
-    fclose(h264_file);
+    // fclose(h264_file);
     /* 清理资源 */
     h264_encoder_cleanup(&encoder);
     v4l2_stream_off();
