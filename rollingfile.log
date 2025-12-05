@@ -33710,3 +33710,13 @@ Server: RTSP Server/1.0
 2025-12-04 19:28:06,746 [DEBUG] [media/MonitorServer.cc:79][acceptLoop] MonitorServer epoll_wait timeout, thread id: 9166327382295539304
 2025-12-04 19:28:07,065 [DEBUG] [reactor/EventLoop.cc:128][waitEpollFd] epoll_wait timeout, thread id: 5262939922109771389
 2025-12-04 19:28:07,711 [DEBUG] [reactor/EventLoop.cc:128][waitEpollFd] epoll_wait timeout, thread id: 8475885536588566928
+2025-12-04 19:28:09,666 [DEBUG] [reactor/EventLoop.cc:128][waitEpollFd] epoll_wait timeout, thread id: 15867296196859115901
+2025-12-04 19:28:09,697 [DEBUG] [reactor/EventLoop.cc:128][waitEpollFd] epoll_wait timeout, thread id: 13239634439354526483
+2025-12-04 19:28:09,701 [DEBUG] [reactor/EventLoop.cc:128][waitEpollFd] epoll_wait timeout, thread id: 11530252633744284094
+2025-12-04 19:28:09,750 [DEBUG] [media/MonitorServer.cc:79][acceptLoop] MonitorServer epoll_wait timeout, thread id: 9166327382295539304
+2025-12-04 19:28:10,068 [DEBUG] [reactor/EventLoop.cc:128][waitEpollFd] epoll_wait timeout, thread id: 5262939922109771389
+2025-12-04 19:28:10,714 [DEBUG] [reactor/EventLoop.cc:128][waitEpollFd] epoll_wait timeout, thread id: 8475885536588566928
+2025-12-04 19:28:12,670 [DEBUG] [reactor/EventLoop.cc:128][waitEpollFd] epoll_wait timeout, thread id: 15867296196859115901
+2025-12-04 19:28:12,701 [DEBUG] [reactor/EventLoop.cc:128][waitEpollFd] epoll_wait timeout, thread id: 13239634439354526483
+2025-12-04 19:28:12,705 [DEBUG] [reactor/EventLoop.cc:128][waitEpollFd] epoll_wait timeout, thread id: 11530252633744284094
+2025-12-04 19:28:12,754 [DEBUG] [media/MonitorServer.cc:79][acceptLoop] MonitorServer epoll_wait timeout, thread id: 9166327382295539304
