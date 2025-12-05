@@ -275,9 +275,9 @@ void RtspConnect::handleRecord(const std::string& url,
             char kcp_buffer[1500];
             int rtp_len = ikcp_recv(_camKcp, kcp_buffer, sizeof(kcp_buffer));
             if (rtp_len > 0) {
-                LOG_DEBUG("Recived KCP %d data",rtp_len);
+                // LOG_DEBUG("Recived KCP %d data",rtp_len);
+                MonitorServer::instance().onNaluUdp(_session.sessionId, kcp_buffer, rtp_len);
             }
-            MonitorServer::instance().onNaluUdp(_session.sessionId, (uint8_t*)kcp_buffer, rtp_len);
         }
     });
     if (_state != RtspState::READY) {

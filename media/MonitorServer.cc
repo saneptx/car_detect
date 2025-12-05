@@ -12,10 +12,23 @@
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
+#include "ikcp.h"  
+
+int MonitorServer::_udpServerRtpFd = -1;
+int MonitorServer::_udpServerRtcpFd = -1;
+static inline uint32_t kcp_getu32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
 
 MonitorServer &MonitorServer::instance() {
     static MonitorServer inst;
     return inst;
+}
+MonitorServer::~MonitorServer(){
+    if(_udpServerRtpFd >= 0) ::close(_udpServerRtpFd);
+    if(_udpServerRtcpFd >= 0) ::close(_udpServerRtcpFd);
+    if(_epfd >= 0) ::close(_epfd);
+    if(_listenFd >= 0) ::close(_listenFd);
 }
 MonitorServer::MonitorServer():_evtList(1024){
     createEpollFd();
@@ -70,6 +83,7 @@ void MonitorServer::acceptLoop() {
     }
     LOG_INFO("MonitorServer listening on %s", _server.toString());
     addEpollReadFd(_listenFd);
+    addEpollReadFd(_udpServerRtpFd);
     while (true) {
         int readyNum = epoll_wait(_epfd,&*_evtList.begin(),_evtList.size(),3000);
         if(-1 == readyNum){
@@ -93,7 +107,7 @@ void MonitorServer::acceptLoop() {
                     qtClient._clientIp = inet_ntoa(cliAddr.sin_addr);
                     {
                         std::lock_guard<std::mutex> lock(_mtx);
-                        _qtClients[connfd] = qtClient;
+                        _qtClients[connfd] = std::move(qtClient);
                     }
                     addEpollReadFd(connfd);
                     LOG_INFO("MonitorServer new client fd=%d", connfd);
@@ -109,6 +123,16 @@ void MonitorServer::acceptLoop() {
                         if(n==0){
                             LOG_DEBUG("Qt Client closed!");
                             delEpollReadFd(fd);
+                            for(auto &s : _qtClients[fd]._sessionMap){
+                                s.second->kcp_runing = false;
+                                if(s.second->_kcpThread.joinable()){
+                                    s.second->_kcpThread.join();
+                                }
+                                if(s.second->ikcp){
+                                    ikcp_release(s.second->ikcp);
+                                    s.second->ikcp = nullptr;
+                                }
+                            }
                             _qtClients.erase(fd);
                             break;
                         }
@@ -119,6 +143,7 @@ void MonitorServer::acceptLoop() {
                         parseRequest(recvRequest,method,url,headers);
                     }
                     LOG_DEBUG("Recv QTClient Request:\n%s",recvRequest.c_str());
+                    _qtClients[fd].Cseq++;
                     if(method == "SETUP"){
                         std::map<std::string, std::string> extraHeaders{};
                         extraHeaders["CamNum"] = std::to_string(_cams.size());
@@ -135,15 +160,22 @@ void MonitorServer::acceptLoop() {
                                 continue;
                             std::istringstream iss(e.second);
                             std::string port;
-                            std::vector<unsigned short> ports;
+                            std::vector<std::string> ports;
                             while (std::getline(iss, port, ' ')) {
-                                ports.push_back(static_cast<unsigned short>(std::stoul(port)));
+                                ports.push_back(port);
                             }
-                            auto rtpAddr = InetAddress(_qtClients[fd]._clientIp,ports[0]);
-                            auto rtcpAddr = InetAddress(_qtClients[fd]._clientIp,ports[1]);
-                            _qtClients[fd]._sessionMap[e.first]._videoUdpRtp = rtpAddr;
-                            _qtClients[fd]._sessionMap[e.first]._videoUdpRtcp = rtcpAddr;
-                            // _qtClients[fd]._sessionMap[e.first].ikcp = ikcp_create(++_conv, &rtpAddr);
+                            auto rtpAddr = InetAddress(_qtClients[fd]._clientIp, static_cast<unsigned short>(std::stoul(ports[0])));
+                            auto rtcpAddr = InetAddress(_qtClients[fd]._clientIp, static_cast<unsigned short>(std::stoul(ports[1])));
+                            _qtClients[fd]._sessionMap[e.first] = std::make_unique<udpSession>();
+                            _qtClients[fd]._sessionMap[e.first]->_videoUdpRtp = std::move(rtpAddr);
+                            _qtClients[fd]._sessionMap[e.first]->_videoUdpRtcp = std::move(rtcpAddr);
+                            _qtClients[fd]._sessionMap[e.first]->conv = std::move(std::stoul(ports[2]));
+                            _qtClients[fd]._sessionMap[e.first]->ikcp = kcp_init(_qtClients[fd]._sessionMap[e.first]->conv,
+                                                                        &_qtClients[fd]._sessionMap[e.first]->_videoUdpRtp);
+                            _qtClients[fd]._sessionMap[e.first]->kcp_runing = true;
+                            _qtClients[fd]._sessionMap[e.first]->_kcpThread = std::thread([this,fd,e]{
+                                kcp_update_thread(_qtClients[fd]._sessionMap[e.first].get());
+                            });
                         }
                     } else if(method == "ADDCAM"){//收到qt端发送的添加端口信息，更新列表
                         LOG_DEBUG("Recieved Qt Client ADDCAM Respond");
@@ -153,12 +185,57 @@ void MonitorServer::acceptLoop() {
                                 continue;
                             std::istringstream iss(e.second);
                             std::string port;
-                            std::vector<unsigned short> ports;
+                            std::vector<std::string> ports;
                             while (std::getline(iss, port, ' ')) {
-                                ports.push_back(static_cast<unsigned short>(std::stoul(port)));
+                                ports.push_back(port);
                             }
-                            _qtClients[fd]._sessionMap[e.first]._videoUdpRtp = InetAddress(_qtClients[fd]._clientIp,ports[0]);
-                            _qtClients[fd]._sessionMap[e.first]._videoUdpRtcp = InetAddress(_qtClients[fd]._clientIp,ports[1]);
+                            auto rtpAddr = InetAddress(_qtClients[fd]._clientIp, static_cast<unsigned short>(std::stoul(ports[0])));
+                            auto rtcpAddr = InetAddress(_qtClients[fd]._clientIp, static_cast<unsigned short>(std::stoul(ports[1])));
+                            _qtClients[fd]._sessionMap[e.first] = std::make_unique<udpSession>();
+                            _qtClients[fd]._sessionMap[e.first]->_videoUdpRtp = std::move(rtpAddr);
+                            _qtClients[fd]._sessionMap[e.first]->_videoUdpRtcp = std::move(rtcpAddr);
+                            _qtClients[fd]._sessionMap[e.first]->conv = std::move(std::stoul(ports[2]));
+                            _qtClients[fd]._sessionMap[e.first]->ikcp = kcp_init(_qtClients[fd]._sessionMap[e.first]->conv,
+                                                                        &_qtClients[fd]._sessionMap[e.first]->_videoUdpRtp);
+                            _qtClients[fd]._sessionMap[e.first]->kcp_runing = true;
+                            _qtClients[fd]._sessionMap[e.first]->_kcpThread = std::thread([this,fd,e]{
+                                kcp_update_thread(_qtClients[fd]._sessionMap[e.first].get());
+                            });
+                        }
+                    }
+                }else if(fd == _udpServerRtpFd){
+                    char udp_buffer[2048]; 
+                    ssize_t n;
+                    // 循环读取所有待处理的 UDP 包
+                    while (true) {  
+                        n= ::recv(_udpServerRtpFd, udp_buffer, sizeof(udp_buffer), MSG_DONTWAIT);
+                        uint32_t conv = kcp_getu32((const uint8_t*)udp_buffer);
+                        ikcpcb* kcp = nullptr;
+                        std::lock_guard<std::mutex> lock(_mtx);
+                        for(const auto& qt : _qtClients){
+                            for(const auto& s : qt.second._sessionMap){
+                                if(s.second->conv == conv){
+                                    kcp = s.second->ikcp;
+                                }
+                            }
+                            if(kcp) break;
+                        }
+                        if (n > 0) {
+                            // 正常接收数据，喂给 KCP
+                            ikcp_input(kcp, udp_buffer, (int)n);
+                            // LOG_DEBUG("Received UDP packet (len=%zd) and fed to KCP.", n);
+                        } else if (n == -1) {
+                            // 区分 EAGAIN（无数据）和真错误
+                            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                                // 无数据，退出循环（无需打印错误）
+                                break;
+                            } else {
+                                // 真错误，打印并处理
+                                LOG_ERROR("UDP recv error: %s", strerror(errno));
+                                break;
+                            }
+                        } else { // n == 0，UDP 无连接，n=0 无意义
+                            break;
                         }
                     }
                 }
@@ -215,7 +292,7 @@ void MonitorServer::parseRequest(const std::string& request,
         Cseq: value\r\n
         \r\n
 */
-void MonitorServer::sendRespond(const std::map<std::string, std::string>& extraHeaders,QtClient client){
+void MonitorServer::sendRespond(const std::map<std::string, std::string>& extraHeaders,const QtClient& client){
     std::ostringstream oss;
     int statusCode = 200;
     std::string statusText = "OK";
@@ -223,7 +300,7 @@ void MonitorServer::sendRespond(const std::map<std::string, std::string>& extraH
     oss << statusCode << " " << statusText << "\r\n";
     
     // CSeq头
-    oss << "CSeq: " << ++client.Cseq << "\r\n";
+    oss << "CSeq: " << client.Cseq << "\r\n";
     
     // 额外头部
     for (const auto& pair : extraHeaders) {
@@ -275,12 +352,18 @@ void MonitorServer::onNaluTcp(const std::string &streamName,
     }
 }
 
-void MonitorServer::onNaluUdp(std::string sessionId,const uint8_t *data, size_t len){
+void MonitorServer::onNaluUdp(std::string sessionId,const char *data, size_t len){
+    // for (auto &m : _qtClients) {
+    //     ::sendto(_udpServerRtpFd,data,len,MSG_DONTWAIT,//非阻塞发送
+    //         (struct sockaddr*)m.second._sessionMap[sessionId]._videoUdpRtp.getInetAddrPtr(),
+    //         m.second._sessionMap[sessionId]._videoUdpRtp.getInetAddrLen());
+    //     // LOG_DEBUG("Send to QtClient %d data",n);
+    // }
     for (auto &m : _qtClients) {
-        ::sendto(_udpServerRtpFd,data,len,MSG_DONTWAIT,//非阻塞发送
-            (struct sockaddr*)m.second._sessionMap[sessionId]._videoUdpRtp.getInetAddrPtr(),
-            m.second._sessionMap[sessionId]._videoUdpRtp.getInetAddrLen());
-        // LOG_DEBUG("Send to QtClient %d data",n);
+        if(m.second._sessionMap.count(sessionId)){
+            std::lock_guard<std::mutex> lock(m.second._sessionMap[sessionId]->_kcpMutex);
+            ikcp_send(m.second._sessionMap[sessionId]->ikcp,data,len);
+        }
     }
 }
 
@@ -325,7 +408,7 @@ void MonitorServer::addCam(std::string sessionId,std::string stringName){//向qt
     if(_qtClients.empty()){
         return;
     }
-    for(auto qtc : _qtClients){
+    for(auto &qtc : _qtClients){
         if(!qtc.second._sessionMap.count(sessionId)){//qt端没有添加该摄像头信息
             std::string addCamReq = "ADDCAM " + _server.toString() + "\r\n"
                                     "Cseq: " + std::to_string(++qtc.second.Cseq) + "\r\n"
@@ -336,15 +419,48 @@ void MonitorServer::addCam(std::string sessionId,std::string stringName){//向qt
     }
 }
 
+void MonitorServer::kcp_update_thread(udpSession *session){
+    while (session->kcp_runing) {
+        {
+            std::lock_guard<std::mutex> lock(session->_kcpMutex);
+            if(session->ikcp){
+                ikcp_update(session->ikcp, iclock());
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+int MonitorServer::kcp_output(const char *buf, int len, ikcpcb *kcp, void *user) {
+    auto addr = (InetAddress*)(user);
+    return ::sendto(_udpServerRtpFd,buf,len,MSG_DONTWAIT,(struct sockaddr*)addr->getInetAddrPtr(),addr->getInetAddrLen());
+}
+
+ikcpcb* MonitorServer::kcp_init(uint32_t conv,InetAddress *addr){
+    ikcpcb* kcp = ikcp_create(conv,addr);
+    kcp->output = kcp_output;
+    ikcp_nodelay(kcp, 1, 10, 2, 0);
+    ikcp_wndsize(kcp, 128, 128);
+    ikcp_setmtu(kcp, 1450);
+    return kcp;
+}
+
 void MonitorServer::removeCam(std::string sessionId){
     std::lock_guard<std::mutex> lock(_mtx);
     _cams.erase(sessionId);
-    for(auto qtc : _qtClients){
+    for(auto& qtc : _qtClients){
         if(qtc.second._sessionMap.count(sessionId)){//qt端有该摄像头信息
             std::string addCamReq = "DELCAM " + _server.toString() + "\r\n"
                                     "Cseq: " + std::to_string(qtc.second.Cseq) + "\r\n"
                                     "SessionId: " + sessionId + "\r\n\r\n";
             ::send(qtc.second.tcpFd,addCamReq.c_str(),addCamReq.size(),0);
+            qtc.second._sessionMap[sessionId]->kcp_runing = false;
+            if(qtc.second._sessionMap[sessionId]->_kcpThread.joinable()){
+                qtc.second._sessionMap[sessionId]->_kcpThread.join();
+            }
+            if(qtc.second._sessionMap[sessionId]->ikcp){
+                ikcp_release(qtc.second._sessionMap[sessionId]->ikcp);
+                qtc.second._sessionMap[sessionId]->ikcp = nullptr;
+            }
             qtc.second._sessionMap.erase(sessionId);
         }
     }
