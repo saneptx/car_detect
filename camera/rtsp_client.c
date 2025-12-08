@@ -353,6 +353,7 @@ int main(int argc, char *argv[]) {
     session.state = RTSP_STATE_READY;
     
     session.kcp = kcp_init(&session.rtp_socket);
+    pthread_mutex_init(&session.mutex,NULL);
     /* 4. RECORD（开始推流） */
     printf("\n[4] 发送RECORD请求...\n");
     
@@ -395,7 +396,9 @@ int main(int argc, char *argv[]) {
         long wait_ms;
         if (current_ms >= next_kcp_update_time) {
             // 时间已到或已过期，驱动 KCP
+            pthread_mutex_lock(&session.mutex);
             ikcp_update(session.kcp, current_ms);
+            pthread_mutex_unlock(&session.mutex);
             // 计算下一次更新时间
             next_kcp_update_time = ikcp_check(session.kcp, current_ms);
         }
@@ -463,8 +466,10 @@ int main(int argc, char *argv[]) {
             while (true) {
                 n = udp_recv(&session.rtp_socket, udp_buffer, sizeof(udp_buffer));
                 if (n > 0) {
+                    pthread_mutex_lock(&session.mutex);
                     // 正常接收数据，喂给 KCP
                     ikcp_input(session.kcp, udp_buffer, (int)n);
+                    pthread_mutex_unlock(&session.mutex);
                     // LOG_DEBUG("Received UDP packet (len=%zd) and fed to KCP.", n);
                 } else if (n == -1) {
                     // 区分 EAGAIN（无数据）和真错误

@@ -113,9 +113,11 @@ void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
 
         if (strcmp(session->transType, "tcp") == 0)
             send_rtp_over_tcp(session, packet, pkt_len, session->rtpChannel);
-        else
-            // udp_send(&session->rtp_socket, packet, pkt_len);
+        else{
+            pthread_mutex_lock(&session->mutex);
             send_rtp_over_kcp(packet,pkt_len,session->kcp);
+            pthread_mutex_unlock(&session->mutex);
+        }
 
     }else{
         // FU-A 分片发送
@@ -163,9 +165,11 @@ void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
             // send rtp...
             if (strcmp(session->transType, "tcp") == 0)
                 send_rtp_over_tcp(session, packet, offset, session->rtpChannel);
-            else
-                // udp_send(&session->rtp_socket, packet, offset);
+            else{
+                pthread_mutex_lock(&session->mutex);
                 send_rtp_over_kcp(packet,offset,session->kcp);
+                pthread_mutex_unlock(&session->mutex);
+            }
             pos += len;
             isStart = false;
         }
@@ -478,8 +482,3 @@ int rtsp_parse_describe_response(rtsp_session_t *session, const char *request_ur
     build_setup_url(session, request_url);
     return 0;
 }
-
-// int rtsp_client_setup_auto(rtsp_session_t *session, const char *transport) {
-//     if (!session || session->setup_url[0] == '\0') return -1;
-//     return rtsp_client_setup(session, session->setup_url, transport);
-// }

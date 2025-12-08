@@ -209,33 +209,33 @@ void MonitorServer::acceptLoop() {
                     // 循环读取所有待处理的 UDP 包
                     while (true) {  
                         n= ::recv(_udpServerRtpFd, udp_buffer, sizeof(udp_buffer), MSG_DONTWAIT);
-                        uint32_t conv = kcp_getu32((const uint8_t*)udp_buffer);
-                        ikcpcb* kcp = nullptr;
-                        std::lock_guard<std::mutex> lock(_mtx);
-                        for(const auto& qt : _qtClients){
-                            for(const auto& s : qt.second._sessionMap){
-                                if(s.second->conv == conv){
-                                    kcp = s.second->ikcp;
-                                }
-                            }
-                            if(kcp) break;
-                        }
-                        if (n > 0) {
-                            // 正常接收数据，喂给 KCP
-                            ikcp_input(kcp, udp_buffer, (int)n);
-                            // LOG_DEBUG("Received UDP packet (len=%zd) and fed to KCP.", n);
-                        } else if (n == -1) {
-                            // 区分 EAGAIN（无数据）和真错误
-                            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                                // 无数据，退出循环（无需打印错误）
-                                break;
-                            } else {
-                                // 真错误，打印并处理
+                        //1.如果没有数据直接跳过
+                        if (n <= 0) {
+                            if (n == -1 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
                                 LOG_ERROR("UDP recv error: %s", strerror(errno));
-                                break;
                             }
-                        } else { // n == 0，UDP 无连接，n=0 无意义
                             break;
+                        }
+                        uint32_t conv = kcp_getu32((const uint8_t*)udp_buffer);
+                        udpSession* targetSession = nullptr;
+                        // 2. 使用全局锁查找 Session
+                        {
+                            std::lock_guard<std::mutex> lock(_mtx);
+                            for (const auto& qt : _qtClients) {
+                                for (const auto& s : qt.second._sessionMap) {
+                                    if (s.second->conv == conv) {
+                                        targetSession = s.second.get(); // 获取原生指针
+                                        break;
+                                    }
+                                }
+                                if (targetSession) break;
+                            }
+                        }
+                        if (targetSession) {
+                            std::lock_guard<std::mutex> kcpLock(targetSession->_kcpMutex); // <--- 关键修复：加锁！
+                            ikcp_input(targetSession->ikcp, udp_buffer, (int)n);
+                        } else {
+                            LOG_DEBUG("Unknown KCP conv: %d", conv);
                         }
                     }
                 }
@@ -353,12 +353,6 @@ void MonitorServer::onNaluTcp(const std::string &streamName,
 }
 
 void MonitorServer::onNaluUdp(std::string sessionId,const char *data, size_t len){
-    // for (auto &m : _qtClients) {
-    //     ::sendto(_udpServerRtpFd,data,len,MSG_DONTWAIT,//非阻塞发送
-    //         (struct sockaddr*)m.second._sessionMap[sessionId]._videoUdpRtp.getInetAddrPtr(),
-    //         m.second._sessionMap[sessionId]._videoUdpRtp.getInetAddrLen());
-    //     // LOG_DEBUG("Send to QtClient %d data",n);
-    // }
     for (auto &m : _qtClients) {
         if(m.second._sessionMap.count(sessionId)){
             std::lock_guard<std::mutex> lock(m.second._sessionMap[sessionId]->_kcpMutex);
@@ -446,20 +440,22 @@ ikcpcb* MonitorServer::kcp_init(uint32_t conv,InetAddress *addr){
 
 void MonitorServer::removeCam(std::string sessionId){
     std::lock_guard<std::mutex> lock(_mtx);
-    _cams.erase(sessionId);
     for(auto& qtc : _qtClients){
         if(qtc.second._sessionMap.count(sessionId)){//qt端有该摄像头信息
-            std::string addCamReq = "DELCAM " + _server.toString() + "\r\n"
+            std::string removeCamReq = "DELCAM " + _server.toString() + "\r\n"
                                     "Cseq: " + std::to_string(qtc.second.Cseq) + "\r\n"
                                     "SessionId: " + sessionId + "\r\n\r\n";
-            ::send(qtc.second.tcpFd,addCamReq.c_str(),addCamReq.size(),0);
-            qtc.second._sessionMap[sessionId]->kcp_runing = false;
-            if(qtc.second._sessionMap[sessionId]->_kcpThread.joinable()){
-                qtc.second._sessionMap[sessionId]->_kcpThread.join();
-            }
-            if(qtc.second._sessionMap[sessionId]->ikcp){
-                ikcp_release(qtc.second._sessionMap[sessionId]->ikcp);
-                qtc.second._sessionMap[sessionId]->ikcp = nullptr;
+            ::send(qtc.second.tcpFd,removeCamReq.c_str(),removeCamReq.size(),0);
+            {
+                std::lock_guard<std::mutex> lock(qtc.second._sessionMap[sessionId]->_kcpMutex);
+                qtc.second._sessionMap[sessionId]->kcp_runing = false;
+                if(qtc.second._sessionMap[sessionId]->_kcpThread.joinable()){
+                    qtc.second._sessionMap[sessionId]->_kcpThread.join();
+                }
+                if(qtc.second._sessionMap[sessionId]->ikcp){
+                    ikcp_release(qtc.second._sessionMap[sessionId]->ikcp);
+                    qtc.second._sessionMap[sessionId]->ikcp = nullptr;
+                }
             }
             qtc.second._sessionMap.erase(sessionId);
         }

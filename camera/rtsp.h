@@ -26,6 +26,7 @@ typedef struct rtsp_session {
     tcp_client_t client;
     rtsp_state_t state;
     ikcpcb *kcp;
+    pthread_mutex_t mutex;
     char session_id[64];
     int cseq;
     //udp传输
