@@ -1,7 +1,4 @@
 #include "v4l2.h"
-#include <stdint.h>
-#include <turbojpeg.h>
-#include <x264.h>
 
 
 int v4l2_fd = -1;
@@ -38,7 +35,8 @@ int v4l2_dev_init(const char *device) {
         fprintf(stderr, "open error: %s: %s\n", device, strerror(errno)); 
         return -1; 
     } 
-
+    int flags = fcntl(v4l2_fd, F_GETFL, 0);
+    fcntl(v4l2_fd, F_SETFL, flags | O_NONBLOCK);
     /* 查询设备功能 */ 
     ioctl(v4l2_fd, VIDIOC_QUERYCAP, &cap); 
 
@@ -230,69 +228,56 @@ int v4l2_qbuf(struct v4l2_buffer *buf) {
     return 0;
 }
 
-/* 初始化H264编码器 */
 int h264_encoder_init(h264_encoder_t *encoder, int width, int height, int fps) {
     x264_param_t param;
     x264_t *x264_enc;
     
-    x264_param_default_preset(&param, "veryfast", "zerolatency");
+    // 1. 设置参数
+    x264_param_default_preset(&param, "ultrafast", "zerolatency");
     param.i_width = width;
     param.i_height = height;
     param.i_fps_num = fps;
     param.i_fps_den = 1;
-    param.i_keyint_max = fps;
-    param.i_keyint_min = fps;
-    param.i_threads = 1;
+    param.i_keyint_max = fps; // GOP size
+    param.i_keyint_min = fps/2;
+    
+    param.i_csp = X264_CSP_I422; 
+    x264_param_apply_profile(&param, "high422"); // 或者 baseline
     param.b_annexb = 1;  /* 使用Annex-B格式（包含0x00000001起始码） */
     param.b_repeat_headers = 1; /* 每个IDR重复 SPS/PPS，便于新客户端加入 */
-    param.i_csp = X264_CSP_I422;
-    
-    // x264_param_apply_profile(&param, "baseline");
-    x264_param_apply_profile(&param, "high422");
+    param.i_threads = 1;//指定线程数（与切片数匹配）
+    param.b_deterministic = 1;// 强制确定性输出
+    param.i_bframe = 0;//禁用 B 帧
     
     x264_enc = x264_encoder_open(&param);
-    if (!x264_enc) {
-        fprintf(stderr, "无法初始化x264编码器\n");
-        return -1;
-    }
+    if (!x264_enc) return -1;
     
     encoder->x264_encoder = x264_enc;
     encoder->width = width;
     encoder->height = height;
     encoder->fps = fps;
-    encoder->yuv_buffer = malloc(width * height * 3 / 2);  /* YUV420P */
     encoder->initialized = 1;
-    
     return 0;
 }
 
-/* 编码一帧MJPEG数据为H264 */
 int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
                   size_t mjpeg_size, unsigned char *h264_data,
                   size_t h264_buf_size, int *h264_len)
 {
-    if (!encoder || !encoder->initialized || !h264_data || !h264_len)
-        return -1;
+    if (!encoder || !encoder->initialized || !h264_data || !h264_len) return -1;
     if (ensure_tj_decoder() != 0)
         return -1;
     x264_t *x264_enc = (x264_t *)encoder->x264_encoder;
-    x264_picture_t pic_in, pic_out;
+    x264_picture_t pic_in,pic_out;
     x264_nal_t *nals = NULL;
     int i_nal = 0;
-    int i_frame_size = 0;
-    int ret = -1;
-
-    // ---------------------------
-    // 1. 分配 x264 picture
-    // ---------------------------
+    
     if (x264_picture_alloc(&pic_in, X264_CSP_I422,
                            encoder->width, encoder->height) < 0) {
         fprintf(stderr, "x264_picture_alloc failed\n");
         return -1;
     }
-    // ---------------------------
-    // 2. TurboJPEG 解码到 I420
-    // ---------------------------
+
     unsigned char *planes[3];
     int strides[3];
 
@@ -320,45 +305,29 @@ int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
         x264_picture_clean(&pic_in);
         return -1;
     }
-    // ---------------------------
-    // 3. 设置 PTS
-    // ---------------------------
+
+    // 3. 更新 PTS
     static int64_t pts = 0;
     pic_in.i_pts = pts++;
 
-    // ---------------------------
-    // 4. 编码 H.264
-    // ---------------------------
-    memset(&pic_out, 0, sizeof(pic_out));
 
-    i_frame_size = x264_encoder_encode(x264_enc, &nals, &i_nal, &pic_in, &pic_out);
+    // 4. 编码
+    int i_frame_size = x264_encoder_encode(x264_enc, &nals, &i_nal, &pic_in, &pic_out);
+    
     if (i_frame_size < 0) {
         fprintf(stderr, "x264_encoder_encode failed\n");
-        goto cleanup;
+        return -1;
     }
 
-    // ---------------------------
-    // 5. 拼 NAL
-    // ---------------------------
+    // 5. 拷贝数据
     *h264_len = 0;
-
     for (int i = 0; i < i_nal; ++i) {
-        if (*h264_len + nals[i].i_payload > h264_buf_size) {
-            fprintf(stderr,
-                "H264 buffer too small: need %d but have %zu\n",
-                *h264_len + nals[i].i_payload, h264_buf_size);
-            *h264_len = 0;
-            goto cleanup;
-        }
+        if (*h264_len + nals[i].i_payload > h264_buf_size) break;
         memcpy(h264_data + *h264_len, nals[i].p_payload, nals[i].i_payload);
         *h264_len += nals[i].i_payload;
     }
-
-    ret = 0; // success
-
-cleanup:
-    x264_picture_clean(&pic_in); // free x264 allocated memory
-    return ret;
+    x264_picture_clean(&pic_in);
+    return 0;
 }
 
 
@@ -367,7 +336,7 @@ void h264_encoder_cleanup(h264_encoder_t *encoder) {
     if (encoder->initialized) {
         x264_t *x264_enc = (x264_t *)encoder->x264_encoder;
         x264_encoder_close(x264_enc);
-        free(encoder->yuv_buffer);
+        // free(encoder->yuv_buffer);
         encoder->initialized = 0;
     }
     destroy_tj_decoder();

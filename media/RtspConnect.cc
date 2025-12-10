@@ -560,9 +560,5 @@ void RtspConnect::releaseSession(){
     if(_session.audioRtcpConn != nullptr){
         _loop->removeUdpConnection(_session.audioRtcpConn);
     }
-    // if (_recorder) {
-    //     _recorder->close();
-    //     _recorder.reset();
-    // }
     _sessionManager.removeSession(_session.sessionId);
 }

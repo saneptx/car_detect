@@ -2,6 +2,7 @@
 #define _V4L2_H_
 #include <stdio.h> 
 #include <stdlib.h> 
+#include <stdint.h>
 #include <sys/types.h> 
 #include <sys/stat.h> 
 #include <fcntl.h> 
@@ -13,6 +14,9 @@
 #include <linux/videodev2.h> 
 #include <linux/fb.h> 
 #include <stddef.h>
+#include "log.h"
+#include <turbojpeg.h>
+#include <x264.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,7 +42,7 @@ typedef struct h264_encoder {
     int width;
     int height;
     int fps;
-    unsigned char *yuv_buffer;
+    // x264_picture_t *pic_in;
     int initialized;
 } h264_encoder_t;
 

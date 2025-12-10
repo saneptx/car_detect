@@ -1,2 +1,6 @@
 *.log
-build
+*.json
+*.log.*
+/build/
+/camera/build/
+.vscode/

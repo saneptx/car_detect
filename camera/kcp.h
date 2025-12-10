@@ -10,7 +10,7 @@
 
 #define KCP_MTU 1450
 #define KCP_INTERVAL 10
-#define KCP_WNDSIZE 128
+#define KCP_WNDSIZE 256
 
 // static ikcpcb *kcp = NULL;
 

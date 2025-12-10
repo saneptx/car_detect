@@ -116,6 +116,7 @@ void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
         else{
             pthread_mutex_lock(&session->mutex);
             send_rtp_over_kcp(packet,pkt_len,session->kcp);
+            ikcp_flush(session->kcp);
             pthread_mutex_unlock(&session->mutex);
         }
 
@@ -168,6 +169,7 @@ void rtp_send_h264(rtsp_session_t *session, uint32_t *timestamp,
             else{
                 pthread_mutex_lock(&session->mutex);
                 send_rtp_over_kcp(packet,offset,session->kcp);
+                ikcp_flush(session->kcp);
                 pthread_mutex_unlock(&session->mutex);
             }
             pos += len;

@@ -24,6 +24,13 @@
 #define DEFAULT_RTCP_PORT 5005
 #define MAX_BUFFER_SIZE 2048 // UDP/KCP 接收缓冲区大小
 
+static inline uint64_t get_time_us() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000000 + tv.tv_usec;
+}
+
+
 /* 设置文件描述符为非阻塞模式 */
 static int set_socket_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -100,6 +107,8 @@ void *video_stream_thread(void *arg) {
     buf.memory = V4L2_MEMORY_MMAP;
     printf("视频流线程启动\n");
     while (running && sess->state == RTSP_STATE_PLAYING) {
+        uint64_t t0, t1 , t2, t3, t4;
+        t0 = get_time_us();
         /* 从摄像头获取一帧 */
         if (v4l2_dqbuf(&buf) < 0) {//出队 
             usleep(10000);
@@ -107,9 +116,15 @@ void *video_stream_thread(void *arg) {
         }
         mjpeg_data = (unsigned char *)buf_infos[buf.index].start;
         size_t mjpeg_size = buf.bytesused;
+        t1 = get_time_us();
+        uint64_t dqbuf_cost_time = t1 - t0;
+        printf("获取摄像头一帧: %.2f 微秒\n", (float)dqbuf_cost_time);
         /* 解码MJPEG并编码为H264 */
         if (mjpeg_to_h264(&encoder, mjpeg_data, mjpeg_size, h264_data,
                           h264_buf_size, &h264_len) == 0 && h264_len > 0) {
+            t2 = get_time_us();
+            uint64_t code_cost_time = t2 - t1;
+            printf("编码一帧: %.2f 微秒\n", (float)code_cost_time);
             // if(h264_file){
             //     fwrite(h264_data, 1, h264_len, h264_file);
             // }
@@ -123,11 +138,17 @@ void *video_stream_thread(void *arg) {
                 rtp_send_h264(sess, &timestamp, nalu, nalu_size);
             }
             // 这一帧的所有 NAL 都发完了，再推进一次时间戳
-            timestamp += timestamp_increment;      
+            timestamp += timestamp_increment;
+            t3 = get_time_us();
+            uint64_t send_cost_time = t3 - t2;
+            printf("发送一帧: %.2f 微秒\n", (float)send_cost_time);
         }
         // usleep(90000/DEFAULT_FPS);
         /* 将缓冲区放回队列 */
         v4l2_qbuf(&buf);
+        t4 = get_time_us();
+        uint64_t total_time_cost = t4 - t0;
+        printf("单帧总耗时: %.2f 微秒 | 理论30FPS单帧耗时: 33333微秒\n\n", (float)total_time_cost);
     }
     printf("视频流线程退出\n");
     free(h264_data);
@@ -248,7 +269,8 @@ int main(int argc, char *argv[]) {
         tcp_close_client(&session.client);
         return -1;
     }
-    
+    v4l2_enum_formats();
+    v4l2_print_formats();
     /* 设置视频格式 */
     if (v4l2_set_format(width, height) < 0) {
         fprintf(stderr, "设置视频格式失败\n");
@@ -375,13 +397,8 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "创建视频流线程失败\n");
         goto cleanup;
     }
-    pthread_detach(video_thread);
+    // pthread_detach(video_thread);
     
-    // /* 主循环：保持连接并处理可能的RTSP消息 */
-    // while (running) {
-    //     /* 可以在这里处理服务器发来的RTSP消息（如TEARDOWN） */
-    //     usleep(1000000);  /* 1秒检查一次 */
-    // }
     int maxfd;
     fd_set read_fds;
     struct timeval tv;
@@ -489,7 +506,6 @@ int main(int argc, char *argv[]) {
     }
 
 
-
     printf("\n正在关闭...\n");
     
 cleanup:
@@ -498,9 +514,10 @@ cleanup:
         rtsp_client_teardown(&session, rtsp_url);
         rtsp_client_read_response(&session, response, sizeof(response));
     }
-    
-    /* 等待视频流线程退出 */
-    usleep(200000);
+    if (session.state == RTSP_STATE_PLAYING) {
+        pthread_join(video_thread, NULL);
+        printf("视频流线程已安全退出。\n");
+    }
     // fclose(h264_file);
     /* 清理资源 */
     h264_encoder_cleanup(&encoder);

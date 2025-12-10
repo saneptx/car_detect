@@ -231,11 +231,9 @@ void MonitorServer::acceptLoop() {
                                 if (targetSession) break;
                             }
                         }
-                        if (targetSession) {
-                            std::lock_guard<std::mutex> kcpLock(targetSession->_kcpMutex); // <--- 关键修复：加锁！
+                        {
+                            std::lock_guard<std::mutex> kcpLock(targetSession->_kcpMutex);
                             ikcp_input(targetSession->ikcp, udp_buffer, (int)n);
-                        } else {
-                            LOG_DEBUG("Unknown KCP conv: %d", conv);
                         }
                     }
                 }
@@ -426,6 +424,7 @@ void MonitorServer::kcp_update_thread(udpSession *session){
 }
 int MonitorServer::kcp_output(const char *buf, int len, ikcpcb *kcp, void *user) {
     auto addr = (InetAddress*)(user);
+    // LOG_DEBUG("send %d data",len);
     return ::sendto(_udpServerRtpFd,buf,len,MSG_DONTWAIT,(struct sockaddr*)addr->getInetAddrPtr(),addr->getInetAddrLen());
 }
 
@@ -433,13 +432,14 @@ ikcpcb* MonitorServer::kcp_init(uint32_t conv,InetAddress *addr){
     ikcpcb* kcp = ikcp_create(conv,addr);
     kcp->output = kcp_output;
     ikcp_nodelay(kcp, 1, 10, 2, 0);
-    ikcp_wndsize(kcp, 128, 128);
+    ikcp_wndsize(kcp, 256, 256);
     ikcp_setmtu(kcp, 1450);
     return kcp;
 }
 
 void MonitorServer::removeCam(std::string sessionId){
     std::lock_guard<std::mutex> lock(_mtx);
+    _cams.erase(sessionId);
     for(auto& qtc : _qtClients){
         if(qtc.second._sessionMap.count(sessionId)){//qt端有该摄像头信息
             std::string removeCamReq = "DELCAM " + _server.toString() + "\r\n"
