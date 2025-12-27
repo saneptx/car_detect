@@ -14,7 +14,7 @@ void KcpHandler::initKcp(quint32 conv, QHostAddress remoteAddr, quint16 remotePo
     _kcp = ikcp_create(conv, this);
     _kcp->output = udp_output;
     ikcp_nodelay(_kcp, 1, 10, 2, 0);
-    ikcp_wndsize(_kcp, 128, 128);
+    ikcp_wndsize(_kcp, 256, 256);
     ikcp_setmtu(_kcp, 1450);
     // 设置 KCP 定时器，例如每 10 毫秒或更短
     updateTimer_ = new QTimer(this);

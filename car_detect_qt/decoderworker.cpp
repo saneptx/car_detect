@@ -15,13 +15,13 @@ void DecoderWorker::onPacket(const QByteArray &ba)
     _decoder.decode(reinterpret_cast<const uint8_t*>(ba.constData()),
                     ba.size(),
                     [this](const YUVFrame &frame) { // 替换 QImage
-                    if (frame.data.isNull())
-                        return;
-                    // 注意：这个回调在“解码线程”中，被我们转成signal抛出去
-                    emit frameReady(frame);
-//                    static FILE* f = fopen("debug.yuv", "wb");
-//                    if (f) {
-//                        fwrite(frame.data->data(), 1, frame.data->size(), f);
-//                    }
+                        if (frame.data.isNull())
+                            return;
+                        // 注意：这个回调在“解码线程”中，被我们转成signal抛出去
+                        emit frameReady(frame);
+//                        static FILE* f = fopen("debug.yuv", "wb");
+//                        if (f) {
+//                            fwrite(frame.data->data(), 1, frame.data->size(), f);
+//                        }
                 });
 }

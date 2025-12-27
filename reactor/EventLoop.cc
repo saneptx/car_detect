@@ -25,7 +25,7 @@ EventLoop::EventLoop(Acceptor &acceptor, bool isMainLoop)
 ,_udpConns()
 ,_eventor()//创建用于通信的文件描述符
 ,_isMainLoop(isMainLoop)
-,_threadId() // 初始化为空
+,_threadId()
 {
     // addEpollReadFd(_eventor.getEvtfd());
     // addEpollReadFd(_timeMgr.getTimerFd());

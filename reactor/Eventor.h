@@ -17,9 +17,9 @@ public:
     void handleRead();
     void addEventcb(Functor &&cb);
 private:
-    void doPenddingFunctors();
+    void doPenddingFunctors();//执行函数
     int createEventFd();
-    void wakeUp();
+    void wakeUp();//唤醒操作
     int _evtfd;//用于通信的文件描述符
     std::vector<Functor> _pendings;//待执行的任务
     std::mutex _mutex;//互斥锁访问_pendings队列

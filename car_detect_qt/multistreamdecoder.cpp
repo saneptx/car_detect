@@ -48,12 +48,12 @@ void MultiStreamDecoder::addStream(const QString &name, VideoOpenGLWidget *widge
     ctx.widget = widget;
     ctx.worker = new DecoderWorker;
     ctx.thread = new QThread;
-    ctx.worker->moveToThread(ctx.thread);
+    ctx.worker->moveToThread(ctx.thread);//将DecoderWorker对象的事件处理转移到指定线程
     ctx.thread->start();
 
     // 解码完成后的信号，回到主线程更新UI
     connect(ctx.worker, &DecoderWorker::frameReady,
-            widget, &VideoOpenGLWidget::updateFrame, // 【核心改动 2: 直接连接到新的槽函数】
+            ctx.widget, &VideoOpenGLWidget::updateFrame, // 【核心改动 2: 直接连接到新的槽函数】
             Qt::QueuedConnection);
 
     _streams.insert(name, ctx);
@@ -81,6 +81,12 @@ void MultiStreamDecoder::pushFrame(const QString &name, const QByteArray &frame)
     QByteArray copy = frame;
 
     // 跨线程调用worker的槽函数（自动Queued）
+    /*
+        这里解释一下意义，第一个参数是被调用对象的指针，第二个参数是方法名字，
+        第三个参数是连接类型，第四个参数是函数参数。在这个函数中跨线程调用了it->worker也就是
+        DecoderWorker的onPacket函数，并传入了参数。
+        执行该函数的线程就是it->worker创建的线程。也就是addStream函数中创建的线程。
+    */
     QMetaObject::invokeMethod(
         it->worker,
         "onPacket",

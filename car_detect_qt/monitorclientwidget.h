@@ -28,6 +28,8 @@ private slots:
     void onConnected();
     void onError(QAbstractSocket::SocketError);
     void onReadyRead();
+
+private:
     void parseRespond(const QString& request,
                       QString& statusCode,
                       QString& status,
@@ -48,7 +50,7 @@ private:
     int _cseq = 0;
     // 每路一个 QLabel，用于显示画面
     QMap<QString, VideoOpenGLWidget *> _videoWidgets;
-    FILE* f;
+//    FILE* f;
     // RTP → H264 一帧
     H264RtpReassembler _h264RtpReassmbler;
 

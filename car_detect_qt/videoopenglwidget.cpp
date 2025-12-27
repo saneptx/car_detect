@@ -111,7 +111,7 @@ void VideoOpenGLWidget::createTextures(int width, int height)
     m_textureU->create();
     m_textureU->bind();
     m_textureU->setFormat(QOpenGLTexture::LuminanceFormat); // 修改为 LuminanceFormat
-    m_textureU->setSize(width / 2, height);
+    m_textureU->setSize(width / 2, height / 2);
     m_textureU->allocateStorage();
     m_textureU->setWrapMode(QOpenGLTexture::ClampToEdge);
 
@@ -120,7 +120,7 @@ void VideoOpenGLWidget::createTextures(int width, int height)
     m_textureV->create();
     m_textureV->bind();
     m_textureV->setFormat(QOpenGLTexture::LuminanceFormat); // 修改为 LuminanceFormat
-    m_textureV->setSize(width / 2, height);
+    m_textureV->setSize(width / 2, height / 2);
     m_textureV->allocateStorage();
     m_textureV->setWrapMode(QOpenGLTexture::ClampToEdge);
 
@@ -175,34 +175,38 @@ void VideoOpenGLWidget::paintGL()
     m_program->bind();
     // 设置像素存储方式为 1 字节对齐 (非常重要！)
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    const int w = m_currentFrame.width;
+    const int h = m_currentFrame.height;
 
     // 3. 上传纹理数据 (这是性能关键步骤: CPU -> GPU)
     const uint8_t *y_ptr = (const uint8_t*)m_currentFrame.data->constData();
 
     // Y分量大小：width×height
-    int ySize = m_currentFrame.width * m_currentFrame.height;
-    // U/V分量大小：(width/2)×height（I422的核心计算）
-    int uvSize = (m_currentFrame.width / 2) * m_currentFrame.height;
+    int ySize = w * h;
+    // U/V分量大小
+    int uvW    = w / 2;
+    int uvH    = h / 2;
+    int uvSize = uvW * uvH;
 
     // U分量指针：Y之后偏移ySize
-   const uint8_t *u_ptr = y_ptr + ySize;
-   // V分量指针：U之后偏移uvSize
-   const uint8_t *v_ptr = u_ptr + uvSize;
+    const uint8_t *u_ptr = y_ptr + ySize;
+    // V分量指针：U之后偏移uvSize
+    const uint8_t *v_ptr = u_ptr + uvSize;
 
-   // 上传Y纹理（不变）
-   glActiveTexture(GL_TEXTURE0);
-   m_textureY->bind();
-   m_textureY->setData(QOpenGLTexture::Luminance, QOpenGLTexture::UInt8, y_ptr);
+    // 上传Y纹理（不变）
+    glActiveTexture(GL_TEXTURE0);
+    m_textureY->bind();
+    m_textureY->setData(QOpenGLTexture::Luminance, QOpenGLTexture::UInt8, y_ptr);
 
-   // 上传U纹理（I422尺寸适配）
-   glActiveTexture(GL_TEXTURE1);
-   m_textureU->bind();
-   m_textureU->setData(QOpenGLTexture::Luminance, QOpenGLTexture::UInt8, u_ptr);
+    // 上传U纹理
+    glActiveTexture(GL_TEXTURE1);
+    m_textureU->bind();
+    m_textureU->setData(QOpenGLTexture::Luminance, QOpenGLTexture::UInt8, u_ptr);
 
-   // 上传V纹理（I422尺寸适配）
-   glActiveTexture(GL_TEXTURE2);
-   m_textureV->bind();
-   m_textureV->setData(QOpenGLTexture::Luminance, QOpenGLTexture::UInt8, v_ptr);
+    // 上传V纹理
+    glActiveTexture(GL_TEXTURE2);
+    m_textureV->bind();
+    m_textureV->setData(QOpenGLTexture::Luminance, QOpenGLTexture::UInt8, v_ptr);
 
     // 4. 绘制顶点
     // 获取着色器中的 attribute 位置

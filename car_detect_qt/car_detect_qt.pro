@@ -24,6 +24,7 @@ SOURCES += \
     main.cpp \
     monitorclientwidget.cpp \
     multistreamdecoder.cpp \
+    qmainwindow.cpp \
     videoopenglwidget.cpp
 
 HEADERS += \
@@ -34,6 +35,7 @@ HEADERS += \
     kcphandler.h \
     monitorclientwidget.h \
     multistreamdecoder.h \
+    qmainwindow.h \
     videoopenglwidget.h
 
 FORMS += \

@@ -50,6 +50,7 @@ extern int v4l2_fd;
 extern cam_buf_info buf_infos[FRAMEBUFFER_COUNT]; 
 extern cam_fmt cam_fmts[10]; 
 extern int frm_width, frm_height;
+extern tjhandle tj_decoder;
 
 /* 摄像头初始化 */
 int v4l2_dev_init(const char *device);

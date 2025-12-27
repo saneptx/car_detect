@@ -17,13 +17,15 @@
 #include "log.h"
 #include "kcp.h"
 
-#define DEFAULT_WIDTH 1920
-#define DEFAULT_HEIGHT 1080
-#define DEFAULT_FPS 30
+#define DEFAULT_WIDTH 800
+#define DEFAULT_HEIGHT 600
+#define DEFAULT_FPS 60
 #define DEFAULT_RTP_PORT 5004
 #define DEFAULT_RTCP_PORT 5005
 #define MAX_BUFFER_SIZE 2048 // UDP/KCP 接收缓冲区大小
 
+static int frame_counter=0;
+const int infer_interval = 10;//每10帧推理一次 
 static inline uint64_t get_time_us() {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -119,6 +121,17 @@ void *video_stream_thread(void *arg) {
         t1 = get_time_us();
         uint64_t dqbuf_cost_time = t1 - t0;
         printf("获取摄像头一帧: %.2f 微秒\n", (float)dqbuf_cost_time);
+        // ========== 抽帧推理逻辑 ==========
+        frame_counter++;
+        if (frame_counter >= infer_interval) {
+            frame_counter = 0; // 重置计数器
+            
+            // 1. 解码MJPEG为YUV（复用你现有的tjDecompressToYUVPlanes逻辑）
+            // 2. YOLO模型推理（输入YUV数据，输出原始检测框）
+            // 3. （可选）本地轻量化过滤（如低置信度框直接丢弃）
+            // 4. 将原始检测结果通过TCP/UDP发送给服务器（服务器做NMS）
+        }
+        // ========== 抽帧推理逻辑结束 ==========
         /* 解码MJPEG并编码为H264 */
         if (mjpeg_to_h264(&encoder, mjpeg_data, mjpeg_size, h264_data,
                           h264_buf_size, &h264_len) == 0 && h264_len > 0) {
@@ -148,7 +161,7 @@ void *video_stream_thread(void *arg) {
         v4l2_qbuf(&buf);
         t4 = get_time_us();
         uint64_t total_time_cost = t4 - t0;
-        printf("单帧总耗时: %.2f 微秒 | 理论30FPS单帧耗时: 33333微秒\n\n", (float)total_time_cost);
+        printf("单帧总耗时: %.2f 微秒 | 理论60FPS单帧耗时: 16666微秒\n\n", (float)total_time_cost);
     }
     printf("视频流线程退出\n");
     free(h264_data);
@@ -162,8 +175,8 @@ void print_usage(const char *prog_name) {
     printf("  -s, --server IP         RTSP服务器IP地址\n");
     printf("  -p, --port PORT         RTSP服务器端口 (默认: 8554)\n");
     printf("  -u, --url URL           RTSP URL路径 (默认: /stream)\n");
-    printf("  -w, --width WIDTH       视频宽度 (默认: 640)\n");
-    printf("  -h, --height HEIGHT     视频高度 (默认: 480)\n");
+    printf("  -w, --width WIDTH       视频宽度 (默认: 1920)\n");
+    printf("  -h, --height HEIGHT     视频高度 (默认: 1080)\n");
     printf("  -r, --rtp-port PORT     本地RTP端口 (默认: 5004)\n");
     printf("  -t, --tcp or udp        默认udp\n");
     printf("  -?, --help              显示帮助信息\n");

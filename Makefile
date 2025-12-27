@@ -1,6 +1,6 @@
 CXX := g++
 CXXFLAGS := -std=c++14 -O2 -Wall -Wextra -Wno-unused-parameter -Ireactor -Imedia -g -O0 -fsanitize=address -fno-omit-frame-pointer
-LDFLAGS := -llog4cpp -L/usr/lib/x86_64-linux-gnu -lSDL2 -lpthread -fsanitize=address
+LDFLAGS := -llog4cpp -L/usr/lib/x86_64-linux-gnu -lpthread -fsanitize=address
 
 # 自动收集源码
 REACTOR_SRCS := $(wildcard reactor/*.cc)

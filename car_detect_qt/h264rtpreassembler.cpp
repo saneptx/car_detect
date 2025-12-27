@@ -112,9 +112,7 @@ void H264RtpReassembler::_processRtpNalu(const QString &streamName, const RtpPac
         if (pkt.marker && !_frame.isEmpty()) {
             qDebug() << "[H264RtpReassembler] Complete frame (single NALU), stream:" << streamName
                      << "size:" << _frame.size() << "seq:" << currentSeq;
-            if (onFrameReady) {
-                onFrameReady(streamName, _frame);
-            }
+            emit onFrameReady(streamName, _frame);
             _frame.clear();
         }
     }
@@ -298,9 +296,7 @@ void H264RtpReassembler::_processRtpNalu(const QString &streamName, const RtpPac
     if (pkt.marker && !_frame.isEmpty()) {
         qDebug() << "[H264RtpReassembler] Complete frame (marker set), stream:" << streamName
                  << "size:" << _frame.size() << "markerSeq:" << currentSeq;
-        if (onFrameReady) {
-            onFrameReady(streamName, _frame);
-        }
+        emit onFrameReady(streamName, _frame);
         _frame.clear();
     }
 }

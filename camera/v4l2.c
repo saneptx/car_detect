@@ -25,6 +25,44 @@ static void destroy_tj_decoder(void) {
     }
 }
 
+static void yuv422p_to_yuv420p(
+    const uint8_t *y422, const uint8_t *u422, const uint8_t *v422,
+    int strideY422, int strideU422, int strideV422,
+
+    uint8_t *y420, uint8_t *u420, uint8_t *v420,
+    int strideY420, int strideU420, int strideV420,
+
+    int width, int height
+)
+{
+    /* 1. Y 平面：原样拷贝 */
+    for (int y = 0; y < height; y++) {
+        memcpy(
+            y420 + y * strideY420,
+            y422 + y * strideY422,
+            width
+        );
+    }
+
+    /* 2. U/V 平面：纵向 2 → 1 */
+    int chromaWidth = width / 2;
+
+    for (int y = 0; y < height / 2; y++) {
+        const uint8_t *u_src0 = u422 + (2 * y)     * strideU422;
+        const uint8_t *u_src1 = u422 + (2 * y + 1) * strideU422;
+        uint8_t *u_dst = u420 + y * strideU420;
+
+        const uint8_t *v_src0 = v422 + (2 * y)     * strideV422;
+        const uint8_t *v_src1 = v422 + (2 * y + 1) * strideV422;
+        uint8_t *v_dst = v420 + y * strideV420;
+
+        for (int x = 0; x < chromaWidth; x++) {
+            u_dst[x] = (u_src0[x] + u_src1[x] + 1) >> 1;
+            v_dst[x] = (v_src0[x] + v_src1[x] + 1) >> 1;
+        }
+    }
+}
+
 /* 摄像头初始化 */
 int v4l2_dev_init(const char *device) {
     struct v4l2_capability cap = {0}; 
@@ -136,7 +174,7 @@ int v4l2_set_format(int width, int height) {
     /* 判断是否支持帧率设置 */ 
     if (V4L2_CAP_TIMEPERFRAME & streamparm.parm.capture.capability) { 
         streamparm.parm.capture.timeperframe.numerator = 1; 
-        streamparm.parm.capture.timeperframe.denominator = 30; // 30fps
+        streamparm.parm.capture.timeperframe.denominator = 60; // 60fps
         if (0 > ioctl(v4l2_fd, VIDIOC_S_PARM, &streamparm)) { 
             fprintf(stderr, "ioctl error: VIDIOC_S_PARM: %s\n", strerror(errno)); 
             return -1; 
@@ -232,17 +270,61 @@ int h264_encoder_init(h264_encoder_t *encoder, int width, int height, int fps) {
     x264_param_t param;
     x264_t *x264_enc;
     
-    // 1. 设置参数
+    // 基本设置
     x264_param_default_preset(&param, "ultrafast", "zerolatency");
     param.i_width = width;
     param.i_height = height;
-    param.i_fps_num = fps;
-    param.i_fps_den = 1;
+    param.i_fps_num = fps;//帧率分子
+    param.i_fps_den = 1;//帧率分母
+    param.i_csp = X264_CSP_I420; //图像格式YUV422P
+    //GOP相关设置
+    /*
+        GOP（Group of Pictures，图像组）是指一组连续的帧序列，通常从一个I帧（关键帧）开始，后面跟随多个P帧和B帧。
+    */
     param.i_keyint_max = fps; // GOP size
     param.i_keyint_min = fps/2;
-    
-    param.i_csp = X264_CSP_I422; 
-    x264_param_apply_profile(&param, "high422"); // 或者 baseline
+    //码率控制
+    /*
+    码率 ≈ 分辨率 × 帧率 × 每像素平均比特数
+    码率控制有三种模式
+    CQP(恒定量化参数):
+        特点:
+            不控制码率，画质稳定，编码速度快。
+        结果:
+            画面复杂 → 
+            码率暴涨画面简单 → 码率很低
+        使用:
+            param.rc.i_rc_method = X264_RC_CQP;
+            param.rc.i_qp_constant = 26;
+    ABR(平均码率，x264的"CBR"近似实现)
+        特点:
+            控制“平均码率”,支持 VBV（关键）,实时流媒体最常用
+        使用:
+            param.rc.i_rc_method = X264_RC_ABR;
+            param.rc.i_bitrate = 2000; // kbps
+    CRF(恒定质量):
+        特点:
+            主观化之稳定，码率不稳定
+        结果:
+            适合录像/存文件，不适合实时网络。
+        使用:
+            param.rc.i_rc_method = X264_RC_CRF;
+            param.rc.f_rf_constant = 23;
+    */
+    param.rc.i_rc_method = X264_RC_ABR;
+    param.rc.i_bitrate   = 2000;  // 平均码率
+    /*
+        VBV =Virtual Buffer Verifier
+        用一个“虚拟缓冲区”限制瞬时码率，
+        防止一瞬间把网络/播放器打爆。
+    */
+    param.rc.i_vbv_max_bitrate = 2000;//峰值码率，瞬时不允许超过的码率
+    param.rc.i_vbv_buffer_size = 2000;//缓冲大小，允许“借用”的缓冲
+    param.rc.i_qp_min = 20;//最高画面质量，qp值越小画质越清晰
+    param.rc.i_qp_max = 45;//最低画面质量
+    //其他设置
+    // x264_param_apply_profile(&param, "high422"); // 或者 baseline
+    x264_param_apply_profile(&param, "baseline"); // 或者 baseline
     param.b_annexb = 1;  /* 使用Annex-B格式（包含0x00000001起始码） */
     param.b_repeat_headers = 1; /* 每个IDR重复 SPS/PPS，便于新客户端加入 */
     param.i_threads = 1;//指定线程数（与切片数匹配）
@@ -268,16 +350,28 @@ int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
     if (ensure_tj_decoder() != 0)
         return -1;
     x264_t *x264_enc = (x264_t *)encoder->x264_encoder;
-    x264_picture_t pic_in,pic_out;
+    x264_picture_t pic_in,pic_out;//创建输入帧和输出帧
     x264_nal_t *nals = NULL;
     int i_nal = 0;
     
     if (x264_picture_alloc(&pic_in, X264_CSP_I422,
-                           encoder->width, encoder->height) < 0) {
+                           encoder->width, encoder->height) < 0) {//为输入帧分配内存空间
         fprintf(stderr, "x264_picture_alloc failed\n");
         return -1;
     }
 
+    x264_picture_t pic420;
+    x264_picture_init(&pic420);
+
+    pic420.img.i_csp   = X264_CSP_I420;
+    pic420.img.i_plane = 3;
+
+    x264_picture_alloc(&pic420, X264_CSP_I420, encoder->width, encoder->height);
+    /*
+        MJPE转YUV422P
+        MJPEG = Motion JPEG = 一帧一帧独立的 JPEG 图片,它不是 H.264 那种帧间预测编码，没有 I/P/B 帧概念。
+        一帧MJPEG的编码流程：RGB->颜色空间转换(YCbCr)->色度抽样（4:2:0 / 4:2:2 / 4:4:4）->8×8 分块->DCT（离散余弦变换）->量化->ZigZag->Huffman 编码
+    */
     unsigned char *planes[3];
     int strides[3];
 
@@ -306,13 +400,23 @@ int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
         return -1;
     }
 
+    yuv422p_to_yuv420p(
+        pic_in.img.plane[0], pic_in.img.plane[1], pic_in.img.plane[2],
+        pic_in.img.i_stride[0], pic_in.img.i_stride[1], pic_in.img.i_stride[2],
+
+        pic420.img.plane[0], pic420.img.plane[1], pic420.img.plane[2],
+        pic420.img.i_stride[0], pic420.img.i_stride[1], pic420.img.i_stride[2],
+
+        encoder->width,
+        encoder->height
+    );
     // 3. 更新 PTS
     static int64_t pts = 0;
     pic_in.i_pts = pts++;
 
 
     // 4. 编码
-    int i_frame_size = x264_encoder_encode(x264_enc, &nals, &i_nal, &pic_in, &pic_out);
+    int i_frame_size = x264_encoder_encode(x264_enc, &nals, &i_nal, &pic420, &pic_out);
     
     if (i_frame_size < 0) {
         fprintf(stderr, "x264_encoder_encode failed\n");
@@ -327,6 +431,7 @@ int mjpeg_to_h264(h264_encoder_t *encoder, const unsigned char *mjpeg,
         *h264_len += nals[i].i_payload;
     }
     x264_picture_clean(&pic_in);
+    x264_picture_clean(&pic420);
     return 0;
 }
 

@@ -52,9 +52,10 @@ struct RtpUnit {
 class H264RtpReassembler: public QObject
 {
     Q_OBJECT
+signals:
+    void onFrameReady(QString stringName,QByteArray frame);
 public:
     explicit H264RtpReassembler(QObject *parent = nullptr);
-    std::function<void(const QString &streamName,const QByteArray& frame)> onFrameReady;
 
     void handleRtp(const QString &streamName, const QByteArray &packet);
 private:

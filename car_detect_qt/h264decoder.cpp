@@ -101,10 +101,16 @@ bool H264Decoder::decode(const uint8_t *data, int len,
     av_packet_unref(_packet);
     // 2. 深拷贝数据到AVPacket（堆分配，由 packet 管理））
     uint8_t *buf = (uint8_t *)av_malloc(len);
+    if (!buf) {
+       qWarning() << "H264Decoder: av_malloc failed";
+       return false;
+   }
     memcpy(buf, data, len);
     int ret = av_packet_from_data(_packet, buf, len);
+
     if (ret < 0) {
         qWarning() << "H264Decoder: av_packet_from_data failed";
+        av_free(buf);
         return false;
     }
 
@@ -112,9 +118,9 @@ bool H264Decoder::decode(const uint8_t *data, int len,
     /*解析 NALU，更新 SPS/PPS，视频帧进行解码*/
     ret = avcodec_send_packet(_codecCtx, _packet);
     if (ret < 0) {
-//        qWarning() << "H264Decoder: avcodec_send_packet failed:" << ret;
-//        av_packet_unref(_packet); // 失败时释放包
-//        return false;
+        qWarning() << "H264Decoder: avcodec_send_packet failed:" << ret;
+        av_packet_unref(_packet); // 失败时释放包
+        return false;
     }
 
     while (true) {
@@ -128,58 +134,53 @@ bool H264Decoder::decode(const uint8_t *data, int len,
             av_packet_unref(_packet); // 释放包内存
             return false;
         }
+        //计算 YUV420P 各分量的真实尺寸
         int w = _frame->width;
         int h = _frame->height;
-        int w2 = w / 2;
-        // 注意：I422 格式的 U/V 高度仍为 h，不是 h/2
-        int h_uv = h;
-        int ySize_aligned = (w * h + 3) & ~3;
-        // I422 U/V 尺寸：(W/2) * H
-        int uvSize = w2 * h_uv;
-        int uSize_aligned = (uvSize + 3) & ~3;
-        int vSize_aligned = (uvSize + 3) & ~3;
-        int totalSize = ySize_aligned + uSize_aligned + vSize_aligned;
+        int y_stride_src  = _frame->linesize[0];
+        int u_stride_src  = _frame->linesize[1];
+        int v_stride_src  = _frame->linesize[2];
+        int uv_w = w / 2;
+        int uv_h = h / 2;
+        // 对齐后的总大小：行对齐宽度 × 高度
+        int y_size = w * h;
+        int u_size = uv_w * uv_h;
+        int v_size = uv_w * uv_h;
+        int total  = y_size + u_size + v_size;
 
-        // 分配共享内存
-        QSharedPointer<QByteArray> yuvData(new QByteArray());
-        yuvData->resize(totalSize);
-        uint8_t *dest = (uint8_t*)yuvData->data();
+        // 7. 分配内存并拷贝数据（优化逐行拷贝，减少循环）
+        QSharedPointer<QByteArray> yuv_data(new QByteArray());
+        yuv_data->resize(total);
+        uint8_t* dst = (uint8_t*)yuv_data->data();
 
-        // 内存拷贝: Y 分量
-        for (int i = 0; i < h; ++i) {
-            memcpy(dest + i * w, _frame->data[0] + i * _frame->linesize[0], w);
-        }
+        uint8_t* dst_y = dst;
+        uint8_t* dst_u = dst + y_size;
+        uint8_t* dst_v = dst + y_size + u_size;
 
-        // 内存拷贝: U 分量 (放在第二个 chunk 的位置)
-        // 使用 _frame->data[1] (U) 填充第三个平面
-        uint8_t *destU_chunk = dest + ySize_aligned;
-        for (int i = 0; i < h_uv; ++i) {
-            // 每行拷贝 w2 字节
-            memcpy(destU_chunk + i * w2, _frame->data[1] + i * _frame->linesize[1], w2);
-        }
+        // Y
+        for (int i = 0; i < h; ++i)
+            memcpy(dst_y + i*w, _frame->data[0] + i*y_stride_src, w);
 
-        // 内存拷贝: V 分量 (放在第三个 chunk 的位置)
-        // 使用 _frame->data[2] (V) 填充第二个平面
-        // 注意：起始位置使用对齐后的 ySize_aligned
-        uint8_t *destV_chunk = dest + ySize_aligned + uSize_aligned;
-        for (int i = 0; i < h_uv; ++i) {
-            // 每行拷贝 w2 字节
-            memcpy(destV_chunk + i * w2, _frame->data[2] + i * _frame->linesize[2], w2);
-        }
-        // 构造 YUVFrame 结构体
+        // U
+        for (int i = 0; i < uv_h; ++i)
+            memcpy(dst_u + i*uv_w, _frame->data[1] + i*u_stride_src, uv_w);
+
+        // V
+        for (int i = 0; i < uv_h; ++i)
+            memcpy(dst_v + i*uv_w, _frame->data[2] + i*v_stride_src, uv_w);
+
+        // 8. 构造 YUVFrame（补充真实的 linesize，便于渲染）
         YUVFrame frame;
-        frame.data = yuvData;
+        frame.data = yuv_data;
         frame.width = w;
         frame.height = h;
-        // 传递紧凑的 linesize
-        frame.yLinesize = w;
-        frame.uLinesize = w2;
-        frame.vLinesize = w2;
+        frame.yLinesize = w;       // 有效行宽（渲染用）
+        frame.uLinesize = uv_w;// 有效行宽
+        frame.vLinesize = uv_w;
+        frame.ySize = y_size;      // 对齐后的总大小
+        frame.uSize = u_size;
+        frame.vSize = v_size;
 
-        // 更新为对齐后的大小，以便 videoopenglwidget 计算正确的偏移
-        frame.ySize = ySize_aligned;
-        frame.uSize = uSize_aligned; // 对应 U chunk 的大小
-        frame.vSize = vSize_aligned; // 对应 V chunk 的大小
         //执行回调
         if (onFrame) {
             onFrame(frame);  // 隐式共享，无需 copy

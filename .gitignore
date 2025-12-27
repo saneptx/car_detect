@@ -1,6 +1,6 @@
 *.log
 *.json
 *.log.*
-/build/
-/camera/build/
+/build/*.o
+/camera/build/*.o
 .vscode/

@@ -10,7 +10,7 @@
 #include <QHostAddress>
 #include <QDebug>
 
-static const char *SERVER_IP   = "192.168.5.11";
+static const char *SERVER_IP   = "192.168.55.102";
 static const quint16 SERVER_PORT = 9000;
 
 MonitorClientWidget::MonitorClientWidget(QWidget *parent)
@@ -22,7 +22,7 @@ MonitorClientWidget::MonitorClientWidget(QWidget *parent)
     qDebug() << "MonitorClientWidget()";
     auto layout = new QVBoxLayout(this);
     layout->addLayout(_grid);
-    f = fopen("debug.h264", "wb");
+//    f = fopen("debug.h264", "wb");
     connect(_socket, &QTcpSocket::connected,
             this, &MonitorClientWidget::onConnected);
     connect(_socket, &QTcpSocket::readyRead,
@@ -34,14 +34,11 @@ MonitorClientWidget::MonitorClientWidget(QWidget *parent)
     _socket->setProxy(QNetworkProxy::NoProxy);
     _socket->connectToHost(QString::fromLatin1(SERVER_IP), SERVER_PORT);
     // H264RtpReassembler 组好一"帧" H.264 时回调这里
-    _h264RtpReassmbler.onFrameReady = [this](const QString &streamName, const QByteArray &frame) {
-        // frame 是完整一帧 H.264（含 00 00 00 01 start code）
-        handleFrame(streamName, frame);
-    };
+    connect(&_h264RtpReassmbler,&H264RtpReassembler::onFrameReady,this,&MonitorClientWidget::handleFrame);
 }
 
 MonitorClientWidget::~MonitorClientWidget(){
-    fclose(f);
+//    fclose(f);
 }
 
 void MonitorClientWidget::onConnected()
@@ -276,16 +273,16 @@ void MonitorClientWidget::sendAddCamRespond(QString sessionId){
 // 收到一整帧 H.264（Annex B，含起始码）
 void MonitorClientWidget::handleFrame(const QString &streamName, const QByteArray &frame)
 {
-    if (f) {
-        fwrite(frame.data(), 1, frame.size(), f);
-    }
+//    if (f) {
+//        fwrite(frame.data(), 1, frame.size(), f);
+//    }
     // 如果该 stream 还没有 QLabel + 解码线程，就在这里创建
     if (!_videoWidgets.contains(streamName)) {
         int idx = _videoWidgets.size();
         int row = idx / 2;
         int col = idx % 2;
         auto videoWidget = new VideoOpenGLWidget(this); // 替换 QLabel
-        videoWidget->setFixedSize(1920, 1080);
+        videoWidget->setFixedSize(800, 600);
         videoWidget->setObjectName(streamName);
         _grid->addWidget(videoWidget, row, col);
         // 传递新的控件类型
